@@ -1,0 +1,29 @@
+{
+  "name": "woodshed",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc",
+    "import-songsterr": "node tools/songsterr-import.mjs",
+    "test": "node --experimental-strip-types --disable-warning=ExperimentalWarning --test \"tools/**/*.test.mjs\" \"src/**/*.test.ts\"",
+    "test:gate": "node --experimental-strip-types --disable-warning=ExperimentalWarning tools/test_middleware.mjs"
+  },
+  "dependencies": {
+    "@breezystack/lamejs": "1.2.7",
+    "@coderline/alphatab": "1.9.0",
+    "react": "18.3.1",
+    "react-dom": "18.3.1"
+  },
+  "devDependencies": {
+    "@coderline/alphatab-vite": "1.9.0",
+    "@types/react": "18.3.31",
+    "@types/react-dom": "18.3.7",
+    "@vitejs/plugin-react": "4.7.0",
+    "typescript": "5.9.3",
+    "vite": "6.4.6"
+  }
+}

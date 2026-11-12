@@ -274,7 +274,8 @@ A public site where anyone shares tabs of copyrighted songs needs publisher
 licenses, the same way Songsterr has them. Until that question is answered
 (§9), libraries are private to their owner, and sharing is limited to the
 user's own work and public-domain music. YouTube-link transcription also
-needs a look at YouTube's terms before it ships.
+needs a look at YouTube's terms before it ships. Songsterr links are handled
+in §11.
 
 ### §4.2 YouTube limits
 
@@ -350,6 +351,8 @@ request: loop, speed, transpose, mute, count-in, settings, print, download,
 metronome.
 
 - Import GP / MusicXML / alphaTex / ASCII text tab into a local library.
+- Add from a Songsterr link: fetch the tab data, save it raw, convert it to
+  a Guitar Pro file (§11).
 - Tab view, cursor, follow scrolling, click and double-click on beats.
 - Transport, speed panel, loop with handles, count-in, metronome, count-in
   between loops, latency compensation.
@@ -415,7 +418,9 @@ Write `probe/` scripts and record results in `FINDINGS.md`.
 3. Loop a two-bar `playbackRange` ten times. Measure drift.
 4. Confirm count-in and metronome volumes, and whether count-in can repeat at
    each loop wrap or needs our own click.
-5. Check the npm package for a GP7 exporter and try a round trip.
+5. Check the npm package for a GP7 exporter and try a round trip. **Done
+   2026-11-10 (§11.5):** `exporter.Gp7Exporter` exists in 1.9.0 and two
+   songs round-trip with every note and pitch intact.
 6. `exportAudio()`: get PCM, write a WAV, play it back.
 7. YouTube handler: list available playback rates and measure cursor drift
    over two minutes with sync points every 4 bars.
@@ -427,6 +432,8 @@ Write `probe/` scripts and record results in `FINDINGS.md`.
 
 1. Personal tool, or a public site other people sign up for? This decides
    whether phase 5 exists and how §4.1 plays out.
+   **Answered 2026-11-11: shared with other users, behind Google sign-in.
+   Design in §13.3.**
 2. Do you have Guitar Pro or MusicXML files to start the library with?
 3. Keep the name Woodshed?
 
@@ -436,3 +443,553 @@ Write `probe/` scripts and record results in `FINDINGS.md`.
 
 - 2026-11-10: Songsterr analyzed in the browser (free song, demo song, help
   center, Plus, teacher and new-tab pages). Plan written. No code yet.
+- 2026-11-10: §11 added (add a tab from a Songsterr link). Measured how the
+  link page loads its data and read Songsterr's terms and `ai.txt`. First
+  draft routed the copy through Songsterr's Download button.
+- 2026-11-10: Andrew says he has special permission from Songsterr. §11
+  rewritten for direct import of the link's tab data. Importer built and
+  tested on Earrings and Come As You Are (§11.5). P0 item 5 answered.
+- 2026-11-10: Phase 1 app written (§12). Library and tab view confirmed,
+  the rest untested when the session ran out.
+- 2026-11-11: Phase 1 browser checks finished (§12.3). Nine bugs found and
+  fixed. Eight more Songsterr fields mapped (§12.4).
+- 2026-11-11: Four requests from Andrew (§13). Page width, note spacing,
+  lead and backing volume, and the bass filter are built and checked. The
+  shared library is designed and waiting on accounts.
+
+---
+
+## §11 Add a tab from a Songsterr link
+
+Requested 2026-11-10: paste a link such as
+`https://www.songsterr.com/a/wsa/malcolm-todd-earrings-tab-s1576708t1/r8752738`
+and end up with that tab saved in Woodshed.
+
+### §11.1 What was measured
+
+- The link carries the song id (`s1576708`), the track (`t1`, "Lead Guitar"
+  on this song) and the revision (`r8752738`). Track and revision are
+  optional; without a revision the page serves the latest one.
+- The page HTML embeds `<script id="state" type="application/json">`.
+  `state.meta.current` holds songId, revisionId, title, artist, `image` (a
+  hash naming the notation build), `defaultTrack`, `tracks[]` (instrument,
+  name, MIDI tuning, isGuitar / isBassGuitar / isDrums / isVocalTrack) and
+  `videos[]` (YouTube ids). Earrings: 13 tracks, 17 videos.
+- Each track's notation is a separate file:
+  `https://dqsljvtekg760.cloudfront.net/{songId}/{revisionId}/{image}/{trackIndex}.json`.
+  Earrings lead guitar: 21 KB, format `version: 8`, 50 measures. Shape:
+  measures, voices, beats, notes. Measures carry `signature`,
+  `tripletFeel`, `marker`. Beats carry `duration` as `[num, den]`, `rest`,
+  `tuplet`, `graceNote`, `velocity`, `text`. Notes carry `fret`, `string`,
+  `hp`, `dead`, `ghost`, `staccato`, `bend`, `leftHandVibrato`. Tempo is in
+  `automations.tempo`, lyrics in `newLyrics`.
+- YouTube sync points come from `/api/video-points/{songId}/{revisionId}/list`.
+- alphaTab 1.9.0 ships `exporter.Gp7Exporter` and `exporter.AlphaTexExporter`
+  (checked in the npm package). So a converted score can be saved as a
+  Guitar Pro file. This answers P0 item 5's existence question; the round
+  trip is tested in §11.5.
+
+### §11.2 Permission
+
+Songsterr's terms (updated 2026-06-10) reserve Download for Plus and say
+copying needs "express advance written permission". On 2026-11-10 Andrew said
+he has special permission from Songsterr, so the importer fetches directly.
+Keep that permission in writing somewhere findable.
+
+Design rules that hold regardless:
+
+- One link at a time, when asked. No crawling search, artist or popular
+  pages.
+- Requests go one after another with a short pause, from a generic client
+  name.
+- Imported tabs stay in the private local library. `library/` is
+  git-ignored, so a pushed repo never republishes them.
+
+### §11.3 Flow
+
+1. `npm run import-songsterr -- <link>`. Phase 1's "Add from Songsterr" box
+   calls the same module.
+2. Parse the link, fetch the page, read `state`, fetch every track file and
+   the video sync points.
+3. Save the raw files under `library/songsterr/<songId>-r<revisionId>/`:
+   `meta.json`, `tracks/<i>.json`, `video-points.json`, `source.json` (link,
+   fetch time, client). Raw is the source of truth. A better converter
+   re-runs on it without fetching again.
+4. Convert raw to an alphaTab score and write `score.gp` with `Gp7Exporter`.
+   Re-import that file with alphaTab to check it.
+5. Importing a newer revision of the same song saves next to the old one.
+
+### §11.4 Where it lands
+
+Phase 1, as a Node tool now (`tools/songsterr-import.mjs`), with the app's
+button later.
+
+Acceptance checks:
+
+- The example link parses to song 1576708, track 1, revision 8752738.
+- All 13 track files and `meta.json` save. A second run with a link that
+  names its revision doesn't fetch anything. A link without a revision
+  fetches the page once to learn the latest revision, then reuses the saved
+  tracks if that revision is already there.
+- `score.gp` re-imports with 13 tracks, and the lead guitar has 50 bars with
+  the same note count as the raw JSON.
+- Spot check bars against the Songsterr page: frets, strings, durations,
+  tempo, time signature, tuning.
+
+### §11.5 Results (2026-11-10)
+
+Built: `tools/songsterr/fetch.mjs` (link to raw files),
+`tools/songsterr/convert.mjs` (raw to alphaTab score to `score.gp`),
+`tools/songsterr-import.mjs` (the command), and
+`tools/songsterr/songsterr.test.mjs` (7 tests, `npm test`, no network).
+
+Earrings (song 1576708, revision 8752738):
+
+- 13 tracks, 50 bars, 80 BPM, 16th-note triplet feel, 2-beat pickup bar.
+  Raw track files 355,599 bytes, `score.gp` 99,874 bytes.
+- Note counts match in raw, built score and re-read `score.gp` for every
+  track: 5,777 pitched notes and 512 drum hits.
+- Every pitched note in `score.gp` has the pitch Songsterr's data gives
+  (tuning[string] + fret): 5,777 of 5,777.
+- String direction confirmed two ways. Read with string 0 as the top line,
+  the chord labeled A♭ comes out A♭ E♭ C A♭ E♭ A♭ and the E♭madd9 comes out
+  F D♭ G♭ E♭, the same voicing as `guitar-tabs/earrings-malcolm-todd.txt`
+  ("Ebm9 x6466x"). The other direction gives non-chord tones. Songsterr's
+  page also draws bar 18's bend on the B string and bar 19's on the high E,
+  as the data says.
+- Bend scale confirmed: `tone: 100` is drawn as "full" on Songsterr, so
+  tone / 25 = alphaTab quarter tones.
+- Playback length from alphaTab's MIDI generator: 148.50 s, exactly 2 beats
+  plus 49 bars of 4/4 at 80 BPM.
+- Songsterr numbers the pickup bar 0, so its "bar 17" is index 17 in the
+  file and bar 18 counting from 1.
+
+Come As You Are (song 14, revision 9744332), run to find fields Earrings
+doesn't use. First run reported 9 unknown fields. Now mapped and checked in
+`score.gp`:
+
+| Songsterr field | alphaTab | Checked |
+|---|---|---|
+| `beat.letRing` | `note.isLetRing` on each note | 2,235 notes |
+| `measure.keySignature` `{accidentalCount, mode, transposeAs}` | `bar.keySignature` + type (on each staff bar; the master-bar setter crashes in 1.9) | E minor, 1 sharp |
+| `beat.pickStroke` up/down | `beat.pickStroke` | 6 beats |
+| `beat.brushStroke.direction` | `beat.brushType` | 3 beats. Duration (563, unit unknown) not mapped |
+| `beat.vibratoWithTremoloBar` | `beat.vibrato` | 731 beats |
+| `note.slide: "upwards"` | `SlideOutType.OutUp` | 1 note |
+| `track.sounds` + `trackAutomations` | instrument automation on the bar's first beat | clean to distortion at bar 60, back at 78 |
+| `newLyrics` (Guitar Pro syntax) | `track.applyLyrics`, after `score.finish()` | first vocal line lands on bar 10, one syllable per beat |
+| `track.title`, `withLyrics` | ignored, informational | |
+
+Tuning D G C F A D (whole step down) carries over; 4,871 of 4,871 pitches
+match.
+
+Known limits:
+
+- Fields not seen in these two songs are reported in `convert-report.json`
+  and by the tests, never guessed. Likely next: repeats, palm mute,
+  harmonics, tremolo picking, tapping, capo, flat key signatures.
+- Tempo changes and sound changes are placed at the start of their bar.
+  Only position 0 has been seen.
+- Not imported yet: Songsterr's per-song video list and sync points
+  (`video-points.json` is saved raw for phase 3).
+- The phase 1 app doesn't exist yet. The library is `library/songsterr/`,
+  and the app will read `score.gp` from there.
+
+---
+
+## §12 Phase 1 build notes
+
+Written 2026-11-10, before the code. Decisions that differ from §5 to §7 or
+fill a gap in them.
+
+### §12.1 Library lives on disk, behind a local API
+
+§5 said IndexedDB. The Songsterr importer has to run in Node (the browser
+can't fetch songsterr.com pages across origins), so a local server exists
+anyway. One store is simpler than two: every tab is a folder under
+`library/`, and the dev server exposes it.
+
+- `GET /api/library` lists songs. `GET /api/library/<id>/score` returns the
+  score file. `POST /api/library/files?name=` saves an uploaded file.
+  `POST /api/library/songsterr` runs §11 on a link. `DELETE
+  /api/library/<id>` removes a song.
+- The API is a Vite plugin (`server/library-api.mjs`), attached to both
+  `vite dev` and `vite preview`. It only listens on localhost.
+- Uploads are checked by loading them with alphaTab on the server. Guitar
+  Pro, MusicXML and alphaTex are kept as they are. A plain-text tab is
+  parsed (`tools/ascii-tab.mjs`) and saved as `score.gp` next to the
+  original.
+- Preferences (theme, layout, latency, last track and speed per song,
+  favorites) stay in the browser's localStorage.
+- If §9 lands on "public site", the store moves to Supabase in phase 5. The
+  player only talks to the API, so nothing else changes.
+
+### §12.2 Player decisions
+
+- alphaTab 1.9 settings: `playerMode: EnabledSynthesizer`,
+  `enableSeekToClick` on, `enablePlaybackRangeSelection` off (loops are
+  bar-snapped, like Songsterr's), `scrollMode: Off` (own follow scroller,
+  §3.1).
+- Loop: own overlay drawn from `boundsLookup`, with a handle at each end.
+  `playbackRange` is set from bar starts and ends.
+- Count-in between loops: alphaTab counts in on every `play()`, not on a
+  loop wrap. With the setting on, looping is manual: on `playerFinished`,
+  seek to the loop start and call `play()` again.
+- Transpose: serialize the score to JSON, change frets, strings, chord names
+  and key signatures there, and rebuild with `JsonConverter.jsonToScore`.
+  That reruns alphaTab's `finish()` so its internal lookups stay right. A
+  note pushed below fret 0 moves to the next lower string. If there is none
+  (or it's taken in that beat) the note goes up an octave and is counted,
+  and the panel shows the count.
+- Chord spelling: the first chord sets the key. Flat keys spell every chord
+  with flats, sharp keys with sharps.
+- Shift pitch: `changeTrackTranspositionPitch` on every pitched track.
+- Latency compensation: delays the cursor, not the audio.
+- Downloads: MIDI from `MidiFileGenerator`, WAV from `exportAudio` at 44.1
+  kHz, MP3 from the same samples through `@breezystack/lamejs` (the plain
+  `lamejs` package breaks under ES module bundlers), Guitar Pro from
+  `Gp7Exporter`. All four export the score as currently transposed.
+- Routes are hash-based: `#/` library, `#/song/<id>/<track>`.
+
+### §12.3 Results (2026-11-11)
+
+Phase 1 is built and checked in a real browser (Chromium, 967 px wide, then
+375 px). `npm run dev` serves it at `http://127.0.0.1:5183`. `npx tsc` is
+clean, `npm test` passes 18 tests offline, and `npm run build` produces a
+7.5 MB `dist/`.
+
+I can't hear the output. Where a check says "level", it is the signal
+measured with a Web Audio analyser tapped onto alphaTab's output node.
+
+§7 acceptance checks, on Earrings (13 tracks, 80 BPM):
+
+| Check | Result |
+|---|---|
+| 50% speed takes twice as long | Four bars: 12,000 ms at 100%, 23,999 ms at 50%. Ratio 1.9998 |
+| Loop bars 3 to 4, three times, no drift | Range is ticks 5,760 to 13,440. Passes took 6,020, 6,020 and 6,019 ms. Steady, with a fixed 20 ms gap at the wrap |
+| Count-in is one bar | The song started moving 3,014 ms after play. One bar at 80 BPM is 3,000 ms |
+| Count-in between loops | Each repeat took 9,030 ms: the 6 s loop plus a 3 s count-in |
+| Mute and solo | Level 0.363 with all tracks. 0 with the lead guitar soloed in a bar where it rests. 0 with every track muted. 0.136 with only the bass unmuted. 0.016 with only drums soloed |
+| Transpose +2 | E♭madd9 became Fmadd9, A♭ became B♭, frets 6-6-4-6 became 8-8-6-8. Cursor stayed on its bar. Tool shows "tab +2" |
+| Transpose below fret 0 | Tests only: on Come As You Are at -3, no fret is negative; notes move down a string or the beat goes up an octave, and the counts match |
+| MIDI download | 69 KB, valid header. Tests: 5,487 note-ons, which is alphaTab's own count |
+| WAV download | 26.2 MB, 44.1 kHz stereo, 148.50 s, the exact song length. Rendered in 2.9 s |
+
+Other checks:
+
+- Click a note: the cursor jumps there. Double-click: it plays from there.
+- Every shortcut in §3.19 that phase 1 covers, with real key presses.
+- Loop handles dragged with the mouse: end handle to the next line gave
+  bars 2 to 9, start handle gave bars 5 to 9. The highlight spans both lines.
+- Follow scrolling: over seven lines it scrolled twice, each time because
+  the next line would have left the screen. Scrolling by hand held the view
+  until play was pressed again.
+- Shift pitch: a bass note measured 116.7 Hz as written, 122.9 Hz at +1,
+  104.0 Hz at -2. Frets unchanged.
+- MP3: 3.56 MB, valid frames, 148.5 s at 192 kbps. Guitar Pro: 105 KB zip.
+- Download buttons save `Malcolm Todd - Earrings.mid` and so on (the save
+  was intercepted in the test, no file written).
+- Print view: A4 width, title "Earrings - Malcolm Todd", black and grey ink,
+  print called once. Tested with the pop-up pointed at an in-page frame, so
+  the real system print dialog has not been seen.
+- Sound delay at 300 ms: the cursor moved 306 and 315 ms after alphaTab
+  asked. At 0 it moved at once.
+- Text-tab import: `guitar-tabs/earrings-malcolm-todd.txt` is in the library
+  (22 bars, 284 notes, three section names) and plays at 160 BPM.
+- Library page: file drop, Songsterr link box, search, favorites filter,
+  delete with confirm. Bad files answer HTTP 400 with a plain message. Path
+  tricks answer 404.
+- Light and dark themes both redraw the tab in the right ink.
+- Phone width (375 px): no sideways page scroll, one bar per line, toolbar
+  scrolls inside its own row.
+
+Bugs the checks found, all fixed:
+
+1. **Frozen playback after pausing a count-in.** alphaTab keeps a
+   half-played count-in and finishes it silently before the song moves, even
+   with count-in off. The engine now tracks that state and reloads the MIDI
+   to clear it. After the fix the song moves 132 ms after play.
+2. **Clock wrong at any speed but 100%.** alphaTab's times are already
+   wall-clock at the current speed; the engine divided by the speed again.
+   75% showed 4:24 for a 3:18 song. Now 2:28, 3:18 and 4:57 at 100, 75, 50%.
+3. **Clipping.** The 13-track mix peaks at 1.48 against a limit of 1.0.
+   Default volume is now 70%, and WAV/MP3 exports are scaled to a 0.98 peak.
+4. **Page wider than the window.** The toolbar's width leaked into the page
+   grid. Fixed with a `minmax(0, 1fr)` column; the toolbar wraps on desktop.
+5. **Bar numbers off by one** on songs with a pickup bar. The tab numbers
+   the pickup 0, so the readout and loop label now do too.
+6. **Space toggled the focused button**, so after clicking Loop, Space
+   switched the loop off. Space is now always play/pause outside text boxes.
+7. **Fonts and sounds 404 in dev.** alphaTab's Vite plugin copies them into
+   `public/` at startup, after Vite has listed that folder. The local API
+   serves them from `node_modules` as well.
+8. **Top bar squeezed the title** to "Earr…" on a phone.
+9. Unreadable uploads answered 500. Now 400.
+
+Not checked, or known gaps:
+
+- No human has listened to it. Levels and pitches are measured, tone is not.
+- Only Chromium. Firefox and Safari are untested.
+- The system print dialog and a real saved download.
+- A real drag of a file from the desktop (the drop was simulated).
+- Manual scrolling was not held through a line change, only within a line.
+- The loop wrap has a 20 ms gap every pass (alphaTab's, not tuned).
+- Guitar Pro 3 to 6, MusicXML and alphaTex uploads. Only Guitar Pro 7 and
+  text tabs have been through the importer.
+- Left out of phase 1 on purpose: "Keep the panel open" (the transport bar
+  is always visible) and "Rearrange buttons" (phase 2).
+
+### §12.4 Songsterr fields added since §11.5 (2026-11-11)
+
+Andrew imported three more songs through the link box. Two used fields the
+converter had not seen. Mapped from their real values, then re-converted
+from the saved raw data and counted in `score.gp`:
+
+| Songsterr field | alphaTab | Seen in |
+|---|---|---|
+| `note.vibrato: true` | `note.vibrato = Slight` | Tennessee Whiskey, 9 notes |
+| `note.trill {auxiliaryFret, speed}` | `note.trillValue` = string pitch + fret. Speed (84, 69) has an unknown unit and is left at alphaTab's default | 6 notes |
+| `beat.gradualVelocity: "crescendo"` | `beat.crescendo` | 19 beats |
+| `beat.tremolo: [1, 32]` | `beat.tremoloSpeed`, 32nd notes | 6 beats |
+| `slide: "below"` | `SlideInType.IntoFromBelow` | 2 notes |
+| `slide: "downwards"` | `SlideOutType.OutDown` | 2 notes |
+| `track.voices: 1` | ignored, a count | Fly Love |
+| `beat.upStroke: 1` | ignored when the beat has a `brushStroke`, which it always has so far. Reported if it ever appears alone | Fly Love, 3 beats |
+
+Five songs are in the library now and all convert with nothing unknown.
+
+---
+
+## §13 Requests from Andrew, 2026-11-11
+
+Four asks after trying phase 1. Checked against the plan first.
+
+| Ask | Already planned? | Now |
+|---|---|---|
+| Change the page width to spread the notes out | No. Only tab size and four bars per line (§3.11) | Build now, §13.1 |
+| Volume for the lead and for the backing | Per-track sliders exist. No single lead-vs-rest control | Build now, §13.2 |
+| Songs shared between all users, Google login, upload limits, admin | Phase 5 had "accounts and cloud library" with no detail, waiting on §9 | Designed in §13.3. Not built: needs accounts and hosting from Andrew. He said it is not a priority |
+| Add and filter by bass tabs | Instrument filter was phase 5 (§3.15). Bass links not handled | Build now, §13.4 |
+
+### §13.1 Page width and note spacing
+
+Two settings, because they do different things in alphaTab's page layout.
+
+- **Page width.** How wide the sheet is, from 500 px up to the full window.
+  Default stays 1100 px. A wider page fits more bars on a line; it does not
+  move notes apart by itself.
+- **Note spacing.** alphaTab's `display.stretchForce`, 50% to 250%, default
+  100%. This is the one that spreads notes out: bars get wider, so fewer fit
+  on a line.
+
+Both live in Settings, save in prefs, and redraw as the slider moves.
+
+Checks: at 200% spacing the same bar is about twice as wide and each line
+holds fewer bars. Narrowing the page reduces bars per line. No sideways
+page scroll at any setting.
+
+### §13.2 Lead and backing volume
+
+"Lead" is the track on screen. "Backing" is every other track. Two sliders
+at the top of the Tracks panel, next to overall volume.
+
+- A track's level is its own slider times the lead or backing slider.
+- Switching track moves which one counts as lead.
+- Saved in prefs, so "backing at 50%" carries to the next song.
+- WAV and MP3 exports use the same levels.
+- Songs with one track show no backing slider.
+
+Checks, by measured level: backing at 0 with the lead resting gives silence.
+Lead at 0 leaves the backing level unchanged. Both at 100% matches the level
+from before the change.
+
+When original audio arrives in phase 3, the backing slider also drives the
+backing-track recording.
+
+### §13.3 Shared library (designed, not built)
+
+Andrew's ask: every song anyone adds is there for everyone. Google sign-in.
+Five uploads per user per day. He is admin: unlimited uploads, sees the user
+list, can raise limits for chosen people. This answers §9 with "public
+site", and replaces the vague half of phase 5.
+
+Design:
+
+- **Hosting.** The app as a static site on Vercel (already used for the JAPN
+  trainer). Supabase for the database, Google sign-in and file storage. The
+  Songsterr importer and text-tab parser move from the Vite plugin into
+  serverless functions; they already run in Node.
+- **Tables.** `profiles` (id, email, name, role `admin` or `member`,
+  `daily_limit` default 5, `blocked`). `songs` (id, title, artist, kind,
+  songsterr song and revision ids, file hash, instruments, added_by,
+  added_at, storage path).
+- **Reading.** Signed-in users see every song. Nothing is readable without
+  signing in, which also keeps the library out of search engines.
+- **Adding.** Counted in the server function and in database rules, not
+  just hidden in the page. A user may add while their songs from the last
+  24 hours number fewer than their `daily_limit`. Admin has no limit.
+- **Duplicates.** The same Songsterr song and revision, or the same file
+  hash, is stored once. Re-adding it opens the existing song and does not
+  use up the day's allowance.
+- **Admin page.** Users: email, joined, songs added, limit, block. Songs:
+  who added each, remove.
+- **Per user, not shared.** Favorites, last track and speed per song,
+  settings.
+- **Storage.** Keep `score.gp` only (about 100 KB a song), not Songsterr's
+  raw files. Roughly 10,000 songs per GB.
+
+Suggestions beyond the ask:
+
+1. **Start invite-only.** An allowlist of Google accounts instead of open
+   sign-up. Open sign-up plus five a day still lets 100 strangers add 500
+   songs a day. Opening up later is one switch.
+2. **A "report this tab" link** and a way for the admin to remove a song
+   fast.
+3. **Rolling 24 hours**, not a midnight reset, so nobody adds five at 11:59
+   and five at 12:01.
+
+One thing to settle before opening it to other people: handing tabs of
+copyrighted songs to all users is distribution, including the ones copied
+from Songsterr. Songsterr pays publishers for that (§4.1). The permission
+from §11.2 covers Andrew's own imports. It needs to say, in writing, that it
+covers sharing with other users. Invite-only among friends lowers the
+exposure but does not remove the question. This is Andrew's call, not a
+reason to skip the build.
+
+Needed from Andrew to build: a Supabase project, a Google OAuth client, the
+admin email, and a yes on Vercel. Roughly phase-5 sized. Order to be agreed
+against phase 2.
+
+### §13.4 Bass tabs
+
+- **Links.** A Songsterr link with `-bass-tab-` or `-drum-tab-` in it and no
+  track number opens on Songsterr's own pick for that instrument
+  (`popularTrackBass`, `popularTrackDrum` in the page data). Links with a
+  track number (`t3`) already worked.
+- **Library data.** Each song lists which tracks are guitar, bass, drums or
+  other. Songsterr imports use Songsterr's flags. Uploaded files are
+  classified once from the score: percussion staff, MIDI program (32 to 39
+  is bass, 24 to 31 guitar), then string count.
+- **Filter.** Chips above the list: All, Guitar, Bass, Drums. With Bass on,
+  only songs with a bass track show, and opening one lands on that track.
+- **Badges.** Each row says which instruments the song has.
+- Text tabs with four or five strings were already read as bass.
+
+Checks: a `-bass-tab-` link opens the bass track. The Bass filter hides
+songs with no bass. Opening from the Bass filter shows a four-string tab.
+
+### §13.5 Results (2026-11-11)
+
+§13.1, §13.2 and §13.4 are built and checked in the browser. §13.3 is design
+only. `npx tsc` clean, `npm test` 21 passing, `npm run build` succeeds.
+
+Page width and note spacing (Earrings, lead guitar, 1024 px window):
+
+| Setting | Lines | Bars per line | Bar 18 width |
+|---|---|---|---|
+| Spacing 100% | 11 | 7, 6, 5, 3, 2, 4 | 401 px |
+| Spacing 200% | 21 | 4, 3, 3, 3, 3, 2 | 561 px |
+| Spacing 50% | 8 | 11, 7, 3, 2, 6, 11 | 440 px |
+| Page width 700 | 18 | 4, 4, 4, 4, 2, 2 | 386 px |
+| Page width full | 11 | as 100% | 401 px |
+
+The plan said a bar would be about twice as wide at 200%. It is 1.4 times,
+because a bar can't grow past its line. The count of bars per line is what
+halves. No sideways page scroll at any setting. alphaTab re-lays the page
+out by itself when the sheet's width changes.
+
+Lead and backing volume, as measured signal level with overall volume at
+70%:
+
+| Lead | Backing | Bar | Level |
+|---|---|---|---|
+| 100% | 100% | solo | 0.396 |
+| 100% | 0 | solo | 0.0435 |
+| 50% | 0 | solo | 0.022, half |
+| 0 | 100% | solo | 0.398 |
+| 0 | 0 | solo | 0 |
+| 100% | 100% | lead resting | 0.260 |
+| 100% | 50% | lead resting | 0.130, half |
+| 100% | 0 | lead resting | 0 |
+
+With the bass on screen, lead-only gave 0.106 and backing-only 0.233, so
+"lead" follows the track being shown. A click on the backing slider set 50%
+in the player and in the saved settings.
+
+Bass:
+
+- Library rows now read "Guitar, bass, drums" and so on.
+- Bass filter: four of six songs remain (Fly Love and the Earrings text tab
+  have no bass) and each opens on its bass track.
+- Opening Come As You Are from the Bass filter shows the four-string track,
+  tuned D G C F.
+- A `-drum-tab-` link for a saved song set it to open on track 7 and made no
+  duplicate. Through the API a `-bass-tab-` link gives track 6, a `t2` link
+  gives 2, a plain link gives none.
+
+One bug found: the dev server's watcher ignored `**/library/**` so that
+saving a tab would not reload the page. That glob also matched
+`src/library/`, so edits to the library page were never picked up until a
+restart. The ignore now names the top-level `library/` folder only.
+
+Not checked: none of this has been listened to, and the two volume sliders
+have not been tried during an export.
+
+---
+
+## §14 First hosted copy (Vercel), 2026-11-11
+
+Andrew asked for the code on a new GitHub repo and the app live on Vercel
+now. The shared library (§13.3) is the real hosted design, but it waits on
+Supabase and Google accounts. This section gets a working hosted copy
+without them.
+
+### §14.1 What changes for the hosted copy
+
+The app on Andrew's machine keeps its local library API (§12.1). Vercel has
+no lasting disk, so the hosted build keeps its library in the browser
+instead.
+
+- **Library in the browser.** The production build stores songs in
+  IndexedDB: the entry and the score file. Each browser has its own library
+  until §13.3 replaces it. `npm run dev` still uses `library/` on disk.
+- **Opening files** happens in the browser: alphaTab reads Guitar Pro,
+  MusicXML and alphaTex there, and the text-tab parser and instrument check
+  are plain JavaScript that already run anywhere.
+- **Songsterr links** go to one serverless function, `/api/songsterr`. It
+  runs the §11 importer in a scratch folder and returns `score.gp` plus the
+  song's details. It stores nothing.
+- **Password gate.** `middleware.ts` puts a password on every request,
+  static files and the function included, the same way the JAPN trainer
+  does: a login form, a 30-day cookie, and HTTP 503 until `SITE_PASSWORD`
+  is set in the Vercel dashboard. Two reasons it can't be skipped: the
+  function is a Songsterr download proxy, and Andrew's permission covers
+  his own use, not the internet's.
+- **The password is set by Andrew in the Vercel dashboard**, never in a
+  command here, so it never lands in a transcript.
+
+### §14.2 GitHub
+
+New private repo `woodshed` on Andrew's account. Pushed: the code, the plan
+and the tests. Not pushed: `library/` (Songsterr data and his tabs),
+`node_modules/`, `dist/`, and alphaTab's copied fonts and sounds. All four
+are in `.gitignore`. `.vercelignore` repeats them, so a CLI deploy doesn't
+upload them either.
+
+### §14.3 Checks
+
+- `npm run build` and `npm run preview` behave like the hosted copy:
+  browser library plus the Songsterr function, minus the gate. Add a link,
+  open a text tab, reload the page, delete.
+- Gate tests in Node: 503 with no password, the login form for a page,
+  401 for a file or the function, wrong password refused, right password
+  sets the cookie and lets requests through.
+- After deploy: the live URL answers 503 before the password exists. Once
+  Andrew sets it and the site is redeployed, his login works and a
+  Songsterr link imports. That last one also answers whether Songsterr
+  serves Vercel's servers at all, which can't be known before trying.
+
+### §14.4 Results
+
+(Filled in after deploy.)
+

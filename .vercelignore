@@ -1,0 +1,7 @@
+# Never upload these (woodshed-plan.md §14.2). library/ holds Songsterr data and personal tabs.
+/library/
+/node_modules/
+/dist/
+/public/font/
+/public/soundfont/
+.claude/

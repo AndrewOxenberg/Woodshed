@@ -1,0 +1,6 @@
+/node_modules/
+/library/
+/dist/
+# alphaTab's Vite plugin copies these from node_modules
+/public/font/
+/public/soundfont/
