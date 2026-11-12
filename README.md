@@ -18,6 +18,16 @@ npm run dev
 
 Then open http://127.0.0.1:5183. It runs on your own machine only.
 
+## Hosted copy
+
+https://woodshed-black.vercel.app, behind a password (`SITE_PASSWORD` in the
+Vercel project settings). The hosted copy keeps each person's library in
+their own browser, and imports Songsterr links through one serverless
+function. Deploy with `npx vercel deploy --prod`. Details in plan §14.
+
+`npm run build && npm run preview` serves the same build locally on port
+4173, without the password.
+
 ## What it does
 
 - **Library.** Open a Guitar Pro, MusicXML, alphaTex or plain-text tab, or

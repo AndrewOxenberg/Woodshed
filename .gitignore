@@ -4,3 +4,6 @@
 # alphaTab's Vite plugin copies these from node_modules
 /public/font/
 /public/soundfont/
+
+.vercel
+.env*

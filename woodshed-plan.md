@@ -456,6 +456,8 @@ Write `probe/` scripts and record results in `FINDINGS.md`.
 - 2026-11-11: Four requests from Andrew (§13). Page width, note spacing,
   lead and backing volume, and the bass filter are built and checked. The
   shared library is designed and waiting on accounts.
+- 2026-11-11: Hosted copy deployed to Vercel behind a password gate (§14).
+  GitHub push waiting on Andrew's sign-in; password waiting on him too.
 
 ---
 
@@ -989,7 +991,42 @@ upload them either.
   Songsterr link imports. That last one also answers whether Songsterr
   serves Vercel's servers at all, which can't be known before trying.
 
-### §14.4 Results
+### §14.4 Results (2026-11-11, part done)
 
-(Filled in after deploy.)
+**Live:** https://woodshed-black.vercel.app (Vercel project
+`andrews-projects-ae4b872b/woodshed`). Built in 20 s: the static app, the
+`api/songsterr` function (1.1 MB) and the gate middleware.
+
+Checked:
+
+- Before any password exists, every path answers 503 "Site password not
+  configured": the page, the scripts, the sound file, the function (GET and
+  POST), and a made-up `library/` path.
+- Gate tests: 26 of 26 in Node (`npm run test:gate`).
+- The hosted build, served by `npm run preview` on port 5184 (launch
+  config `woodshed-hosted`): starts empty; a Songsterr link imported
+  Earrings through the same function code (13 tracks, opens on the lead
+  guitar); a four-string text tab uploaded and was classed as bass; both
+  survived a page reload; Earrings played (clock 0:02 to 0:04 in 2 s).
+- A copy holding only the committed files: `npm ci`, `tsc`, build and tests
+  all pass (four library-dependent tests skip).
+
+Found and fixed before the push: `.gitignore` had `library/`, which also
+matched `src/library/`. The repo would have shipped without the library
+page and the Vercel build would have failed. Ignore rules are now anchored
+(`/library/`). Same mistake as the Vite watcher in §13.5.
+
+`vercel link` wrote `.env.local` with a Vercel token. It is git-ignored and
+in `.vercelignore`.
+
+Waiting on Andrew:
+
+1. **Set `SITE_PASSWORD`** in the Vercel dashboard (project woodshed,
+   Settings, Environment Variables, Production), then redeploy. Until then
+   the site shows the 503.
+2. **Sign in to GitHub** in the built-in browser so the private repo can be
+   created and pushed. Two commits are ready locally.
+
+Not checked yet: that Songsterr answers requests from Vercel's servers.
+That needs the password set; one link through the live site settles it.
 
