@@ -32,6 +32,8 @@ export interface EngineState {
   artist: string;
   tracks: TrackState[];
   trackIndex: number;
+  /** Tracks drawn as well as the lead one. Plan §15.2. */
+  also: number[];
   barCount: number;
   /** The song starts with a pickup bar, which the tab numbers 0. */
   pickup: boolean;
@@ -75,6 +77,14 @@ export interface ScoreColors {
   ink: string;
   muted: string;
   line: string;
+}
+
+const PROFILE = { tab: alphaTab.StaveProfile.Tab, sheet: alphaTab.StaveProfile.Score, both: alphaTab.StaveProfile.ScoreTab };
+
+/** Stems under the tab. With the sheet staff above, alphaTab drops them by itself. Plan §15.1, §15.3. */
+function rhythmMode(prefs: Prefs) {
+  if (!prefs.showRhythm) return alphaTab.TabRhythmMode.Hidden;
+  return prefs.view === 'both' ? alphaTab.TabRhythmMode.Automatic : alphaTab.TabRhythmMode.ShowWithBars;
 }
 
 type Listener = () => void;
@@ -130,7 +140,7 @@ export class Engine {
   ) {
     this.prefs = prefs;
     this.state = {
-      status: 'loading', error: null, title: '', artist: '', tracks: [], trackIndex: 0, barCount: 0, pickup: false,
+      status: 'loading', error: null, title: '', artist: '', tracks: [], trackIndex: 0, also: [], barCount: 0, pickup: false,
       playing: false, soundProgress: 0, playerReady: false, speed: 1,
       loop: { on: false, startBar: 0, endBar: 0 }, countIn: false, metronome: false,
       transpose: 0, transposeMoved: 0, transposeRaised: 0, pitchShift: 0, masterVolume: 0.7,
@@ -140,7 +150,7 @@ export class Engine {
     this.api = new alphaTab.AlphaTabApi(host, {
       core: { fontDirectory: '/font/', enableLazyLoading: true },
       display: {
-        staveProfile: alphaTab.StaveProfile.Tab,
+        staveProfile: PROFILE[prefs.view],
         layoutMode: alphaTab.LayoutMode.Page,
         scale: prefs.scale,
         stretchForce: prefs.spacing,
@@ -148,11 +158,11 @@ export class Engine {
         resources: this.resources(colors),
       },
       notation: {
-        rhythmMode: alphaTab.TabRhythmMode.ShowWithBars,
+        rhythmMode: rhythmMode(prefs),
         elements: {
           scoreTitle: false, scoreSubTitle: false, scoreArtist: false, scoreAlbum: false,
           scoreWords: false, scoreMusic: false, scoreWordsAndMusic: false, scoreCopyright: false,
-          trackNames: false,
+          trackNames: false, effectDynamics: prefs.showDynamics,
         },
       },
       player: {
@@ -224,13 +234,15 @@ export class Engine {
 
   // ---- loading -----------------------------------------------------------
 
-  load(bytes: Uint8Array, trackIndex: number, speed = 1) {
+  load(bytes: Uint8Array, trackIndex: number, speed = 1, also: number[] = []) {
     try {
       const score = alphaTab.importer.ScoreLoader.loadScoreFromBytes(bytes, this.api.settings);
       this.originalJson = alphaTab.model.JsonConverter.scoreToJson(score);
       const index = clamp(trackIndex, 0, score.tracks.length - 1);
-      this.state = { ...this.state, trackIndex: index, speed: clamp(speed, MIN_SPEED, MAX_SPEED) };
-      this.api.renderScore(score, [index]);
+      const extra = [...new Set(also)].filter((i) => Number.isInteger(i) && i >= 0 && i < score.tracks.length && i !== index);
+      this.state = { ...this.state, trackIndex: index, also: extra, speed: clamp(speed, MIN_SPEED, MAX_SPEED) };
+      this.prepare(score);
+      this.api.renderScore(score, this.shown());
     } catch (e) {
       this.set({ status: 'error', error: `This file could not be read as a tab. ${(e as Error).message}` });
     }
@@ -283,6 +295,49 @@ export class Engine {
       this.playAfterLoad = false;
       api.play();
     }
+  }
+
+  /** Indexes of every track on screen, in file order. */
+  private shown(): number[] {
+    return [...new Set([this.state.trackIndex, ...this.state.also])].sort((a, b) => a - b);
+  }
+
+  /** The multirest switch lives on the score, so every rebuilt score needs it again. Plan §15.3. */
+  private setMultirest(score: alphaTab.model.Score) {
+    const on = this.prefs.multirest;
+    score.stylesheet.multiTrackMultiBarRest = on;
+    score.stylesheet.perTrackMultiBarRest = on ? new Set(score.tracks.map((t) => t.index)) : null;
+  }
+
+  /**
+   * Make the sheet staff read the way players expect. Songsterr's data has no clefs, so
+   * every staff arrives with a treble clef at sounding pitch. Plan §15.1.
+   */
+  private setClefs(score: alphaTab.model.Score) {
+    const { Clef } = alphaTab.model;
+    for (const track of score.tracks) {
+      for (const staff of track.staves) {
+        const untouched = staff.bars.every((b) => b.clef === Clef.G2);
+        if (staff.isPercussion) {
+          if (untouched) for (const bar of staff.bars) bar.clef = Clef.Neutral;
+          continue;
+        }
+        // Songsterr gives every track a tuning, voices and keyboards included, so go by the
+        // sound: General MIDI 24 to 39 are the guitars and basses. Anything else stays as written.
+        const program = track.playbackInfo.program;
+        if (!staff.tuning.length || program < 24 || program > 39) continue;
+        // Guitar and bass are written an octave above where they sound.
+        if (staff.displayTranspositionPitch === 0) staff.displayTranspositionPitch = -12;
+        // Bass: every open string below C3.
+        if (untouched && Math.max(...staff.tuning) < 48) for (const bar of staff.bars) bar.clef = Clef.F4;
+      }
+    }
+  }
+
+  /** Everything a freshly built score needs before it is drawn. */
+  private prepare(score: alphaTab.model.Score) {
+    this.setMultirest(score);
+    this.setClefs(score);
   }
 
   private track(i: number) {
@@ -411,10 +466,28 @@ export class Engine {
     if (beat) this.seekTick(cache.getBeatStart(beat));
   }
 
+  /**
+   * Where a bar is drawn. A bar folded into a multirest has no place of its own,
+   * so it answers with the multirest that covers it. Plan §15.3.
+   */
+  drawnBar(index: number) {
+    const lookup = this.api.boundsLookup;
+    if (!lookup) return null;
+    const exact = lookup.findMasterBarByIndex(index);
+    if (exact) return exact;
+    let best: alphaTab.rendering.MasterBarBounds | null = null;
+    for (const system of lookup.staffSystems) {
+      for (const bar of system.bars) {
+        if (bar.index <= index && (!best || bar.index > best.index)) best = bar;
+      }
+    }
+    return best;
+  }
+
   /** Move the cursor to the bar above (-1) or below (+1) on the page. */
   stepLine(dir: 1 | -1) {
     const lookup = this.api.boundsLookup;
-    const here = lookup?.findMasterBarByIndex(this.position.bar);
+    const here = this.drawnBar(this.position.bar);
     const system = here?.staffSystemBounds;
     if (!lookup || !here || !system) return;
     const target = lookup.staffSystems[system.index + dir];
@@ -517,9 +590,18 @@ export class Engine {
 
   showTrack(index: number) {
     if (!this.api.score || index === this.state.trackIndex || !this.track(index)) return;
-    this.set({ trackIndex: index });
+    this.set({ trackIndex: index, also: this.state.also.filter((i) => i !== index) });
     this.applyVolumes(); // a different track is the lead now
-    this.api.renderTracks([this.track(index)]);
+    this.api.renderTracks(this.shown().map((i) => this.track(i)));
+  }
+
+  /** Draw another track under the lead one, or stop drawing it. Plan §15.2. */
+  setAlso(index: number, on: boolean) {
+    if (!this.api.score || index === this.state.trackIndex || !this.track(index)) return;
+    const also = this.state.also.filter((i) => i !== index);
+    if (on) also.push(index);
+    this.set({ also: also.sort((a, b) => a - b) });
+    this.api.renderTracks(this.shown().map((i) => this.track(i)));
   }
 
   private patchTrack(index: number, patch: Partial<TrackState>) {
@@ -553,7 +635,8 @@ export class Engine {
     const score = alphaTab.model.JsonConverter.jsObjectToScore(obj, this.api.settings);
     this.pendingTick = this.api.tickPosition;
     this.set({ transpose: n, transposeMoved: result.moved, transposeRaised: result.raised });
-    this.api.renderScore(score, [this.state.trackIndex]);
+    this.prepare(score);
+    this.api.renderScore(score, this.shown());
   }
 
   /** Change the sounding pitch only; the tab stays as written. */
@@ -580,11 +663,20 @@ export class Engine {
     const wanted = this.resources(colors);
     const colorsChanged = res.mainGlyphColor.rgba !== color(wanted.mainGlyphColor).rgba || res.staffLineColor.rgba !== color(wanted.staffLineColor).rgba;
     const bars = prefs.fourBarsPerLine ? 4 : -1;
-    if (colorsChanged || display.scale !== prefs.scale || display.barsPerRow !== bars || display.stretchForce !== prefs.spacing) {
+    const notation = this.api.settings.notation;
+    const dynamics = alphaTab.NotationElement.EffectDynamics;
+    const multirest = before.multirest !== prefs.multirest;
+    if (colorsChanged || multirest || display.scale !== prefs.scale || display.barsPerRow !== bars || display.stretchForce !== prefs.spacing
+      || display.staveProfile !== PROFILE[prefs.view] || notation.rhythmMode !== rhythmMode(prefs)
+      || (notation.elements.get(dynamics) ?? true) !== prefs.showDynamics) {
       for (const [k, v] of Object.entries(wanted)) (res as unknown as Record<string, alphaTab.model.Color>)[k] = color(v);
       display.scale = prefs.scale;
       display.barsPerRow = bars;
       display.stretchForce = prefs.spacing;
+      display.staveProfile = PROFILE[prefs.view];
+      notation.rhythmMode = rhythmMode(prefs);
+      notation.elements.set(dynamics, prefs.showDynamics);
+      if (multirest && this.api.score) this.setMultirest(this.api.score);
       this.api.updateSettings();
       this.api.render();
     }
@@ -595,7 +687,7 @@ export class Engine {
 
   private follow(bar: number, force: boolean) {
     const lookup = this.api.boundsLookup;
-    const system = lookup?.findMasterBarByIndex(bar)?.staffSystemBounds;
+    const system = this.drawnBar(bar)?.staffSystemBounds;
     if (!lookup || !system) return;
     if (!force && (system.index === this.lastSystem || !this.state.playing)) return;
     const previous = lookup.staffSystems[this.lastSystem];

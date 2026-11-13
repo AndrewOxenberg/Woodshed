@@ -1,10 +1,12 @@
 // The pop-up panels above the transport bar. Plan §3.2, §3.4, §3.5, §3.9, §3.10, §3.11.
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { MAX_SPEED, MIN_SPEED, saveBytes, type Engine } from './engine.ts';
-import { setPrefs, usePrefs, type Theme } from '../prefs.ts';
+import { setPrefs, usePrefs, type Theme, type View } from '../prefs.ts';
 import { IconClose } from '../ui/icons.tsx';
 
-export type PanelName = 'speed' | 'transpose' | 'mixer' | 'download' | 'print' | 'settings';
+export type PanelName = 'speed' | 'transpose' | 'mixer' | 'view' | 'download' | 'print' | 'settings' | 'help';
+
+export const VIEW_NAMES: Record<View, string> = { tab: 'Tab', sheet: 'Sheet', both: 'Both' };
 
 const useEngine = (engine: Engine) => useSyncExternalStore(engine.subscribe, engine.getState);
 const usePosition = (engine: Engine) => useSyncExternalStore(engine.subscribePosition, engine.getPosition);
@@ -117,6 +119,7 @@ function MixerPanel({ engine, onClose, onPick }: { engine: Engine; onClose: () =
         </label>
       )}
       <hr />
+      {state.tracks.length > 1 && <p className="hint">Pick a name to make it the lead track. Show draws another track under it.</p>}
       <ul className="tracks">
         {state.tracks.map((t) => {
           const shown = t.index === state.trackIndex;
@@ -124,8 +127,11 @@ function MixerPanel({ engine, onClose, onPick }: { engine: Engine; onClose: () =
             <li key={t.index} className={`track${shown ? ' is-shown' : ''}`}>
               <button type="button" className="track-pick" aria-pressed={shown} onClick={() => onPick(t.index)}>
                 <span className="track-name">{t.name}</span>
-                <span className="track-sub">{t.percussion ? 'Drums' : t.tuning}{shown ? ' · showing' : ''}</span>
+                <span className="track-sub">{t.percussion ? 'Drums' : t.tuning}{shown ? ' · lead' : ''}</span>
               </button>
+              <button type="button" className="toggle toggle-wide" aria-pressed={shown || state.also.includes(t.index)} disabled={shown}
+                aria-label={`Show ${t.name} on the page`} title={shown ? 'This is the track on screen' : 'Show this track as well'}
+                onClick={() => engine.setAlso(t.index, !state.also.includes(t.index))}>Show</button>
               <button type="button" className="toggle" aria-pressed={t.solo} aria-label={`Solo ${t.name}`} title="Solo" onClick={() => engine.setSolo(t.index, !t.solo)}>S</button>
               <button type="button" className="toggle" aria-pressed={t.mute} aria-label={`Mute ${t.name}`} title="Mute" onClick={() => engine.setMute(t.index, !t.mute)}>M</button>
               <input type="range" className="slider track-vol" aria-label={`${t.name} volume`} min={0} max={1} step={0.01} value={t.volume}
@@ -199,7 +205,7 @@ const SHORTCUTS: [string, string][] = [
   ['Space', 'Play or pause'], ['Backspace', 'Back to the loop start, or the top'], ['Double-click', 'Play from that beat'],
   ['← →', 'Move one beat'], ['↑ ↓', 'Move one line'], ['L', 'Loop on or off'], ['Shift + ← →', 'Move the loop end'],
   ['S', 'Speed'], ['K', 'Transpose'], ['T', 'Tracks'], ['Ctrl + Shift + ↑ ↓', 'Previous or next track'], ['Alt + Shift + 1–9', 'Jump to a track'],
-  ['M', 'Mute this track'], ['Alt + M', 'Solo this track'], ['C', 'Count-in'], ['N', 'Metronome'], ['P', 'Print'], ['Esc', 'Close a panel'],
+  ['M', 'Mute this track'], ['Alt + M', 'Solo this track'], ['C', 'Count-in'], ['N', 'Metronome'], ['P', 'Print'], ['Ctrl + K', 'Help'], ['Esc', 'Close a panel'],
 ];
 
 function SettingsPanel({ onClose }: { onClose: () => void }) {
@@ -253,15 +259,60 @@ function SettingsPanel({ onClose }: { onClose: () => void }) {
           onChange={(e) => setPrefs({ latencyMs: Number(e.target.value) })} />
       </label>
       <p className="hint">Raise this if the sound arrives after the cursor, which is common with Bluetooth headphones. It holds the cursor back to match.</p>
+    </Panel>
+  );
+}
 
-      <details className="shortcuts">
-        <summary>Keyboard shortcuts</summary>
+function ViewPanel({ onClose }: { onClose: () => void }) {
+  const prefs = usePrefs();
+  const views: [View, string][] = [['tab', 'Tab'], ['sheet', 'Sheet'], ['both', 'Both']];
+  return (
+    <Panel title="View" onClose={onClose}>
+      <fieldset className="segmented">
+        <legend>Notation</legend>
+        {views.map(([value, label]) => (
+          <label key={value}>
+            <input type="radio" name="view" checked={prefs.view === value} onChange={() => setPrefs({ view: value })} />
+            <span>{label}</span>
+          </label>
+        ))}
+      </fieldset>
+      <p className="hint">Tab shows fret numbers. Sheet shows standard notation. Both stacks them.</p>
+      <label className="check">
+        <input type="checkbox" checked={prefs.showRhythm} onChange={(e) => setPrefs({ showRhythm: e.target.checked })} />
+        <span>Show rhythm under the tab</span>
+      </label>
+      <label className="check">
+        <input type="checkbox" checked={prefs.showDynamics} onChange={(e) => setPrefs({ showDynamics: e.target.checked })} />
+        <span>Show dynamics (loud and soft marks)</span>
+      </label>
+      <label className="check">
+        <input type="checkbox" checked={prefs.multirest} onChange={(e) => setPrefs({ multirest: e.target.checked })} />
+        <span>Combine runs of empty bars</span>
+      </label>
+    </Panel>
+  );
+}
+
+function HelpPanel({ onClose }: { onClose: () => void }) {
+  return (
+    <Panel title="Help" onClose={onClose}>
+      <dl className="howto">
+        <div><dt>Loop a section</dt><dd>Put the cursor in a bar and press L. Drag the two handles, or hold Shift and press the arrow keys, to cover more bars.</dd></div>
+        <div><dt>Slow it down</dt><dd>Press S and pick a speed. The pitch stays the same.</dd></div>
+        <div><dt>Change key</dt><dd>Press K. "Move the tab" rewrites the frets. "Shift the sound" keeps the frets and changes what you hear.</dd></div>
+        <div><dt>Hear less of the band</dt><dd>Press T. Turn the backing down, or use S and M on a track to solo or mute it.</dd></div>
+        <div><dt>See sheet music or more tracks</dt><dd>View switches between tab and sheet. Show in the Tracks panel adds a track to the page.</dd></div>
+      </dl>
+      <hr />
+      <div className="shortcuts">
+        <h3>Keyboard shortcuts</h3>
         <dl>
           {SHORTCUTS.map(([keys, what]) => (
             <div key={keys}><dt><kbd>{keys}</kbd></dt><dd>{what}</dd></div>
           ))}
         </dl>
-      </details>
+      </div>
     </Panel>
   );
 }
@@ -275,6 +326,8 @@ export function PanelHost({ name, engine, onClose, onPickTrack }: {
     case 'mixer': return <MixerPanel engine={engine} onClose={onClose} onPick={onPickTrack} />;
     case 'download': return <DownloadPanel engine={engine} onClose={onClose} />;
     case 'print': return <PrintPanel engine={engine} onClose={onClose} />;
+    case 'view': return <ViewPanel onClose={onClose} />;
     case 'settings': return <SettingsPanel onClose={onClose} />;
+    case 'help': return <HelpPanel onClose={onClose} />;
   }
 }

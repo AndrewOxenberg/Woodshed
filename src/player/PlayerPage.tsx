@@ -5,7 +5,7 @@ import { getPrefs, setSongPrefs, toggleFavorite, usePrefs } from '../prefs.ts';
 import { IconBack, IconPause, IconPlay, IconRestart, IconStar } from '../ui/icons.tsx';
 import { Engine, barNumber, type ScoreColors } from './engine.ts';
 import { LoopOverlay } from './LoopOverlay.tsx';
-import { PanelHost, type PanelName } from './panels.tsx';
+import { PanelHost, VIEW_NAMES, type PanelName } from './panels.tsx';
 
 function readColors(): ScoreColors {
   const css = getComputedStyle(document.documentElement);
@@ -33,6 +33,7 @@ function Tool({ label, value, hint, pressed, open, onClick }: {
 function Transport({ engine, panel, toggle }: { engine: Engine; panel: PanelName | null; toggle: (p: PanelName) => void }) {
   const state = useSyncExternalStore(engine.subscribe, engine.getState);
   const pos = useSyncExternalStore(engine.subscribePosition, engine.getPosition);
+  const prefs = usePrefs();
   const { loop } = state;
   const num = (index: number) => barNumber(index, state.pickup);
   const lastBar = num(Math.max(0, state.barCount - 1));
@@ -84,7 +85,8 @@ function Transport({ engine, panel, toggle }: { engine: Engine; panel: PanelName
           <Tool label="Count-in" value={state.countIn ? 'on' : 'off'} hint="C" pressed={state.countIn} onClick={() => engine.setCountIn(!state.countIn)} />
           <Tool label="Metronome" value={state.metronome ? 'on' : 'off'} hint="N" pressed={state.metronome} onClick={() => engine.setMetronome(!state.metronome)} />
           <Tool label="Transpose" value={key} hint="K" open={panel === 'transpose'} onClick={() => toggle('transpose')} />
-          <Tool label="Tracks" value={`${state.tracks.length}`} hint="T" open={panel === 'mixer'} onClick={() => toggle('mixer')} />
+          <Tool label="Tracks" value={state.also.length ? `${state.also.length + 1} of ${state.tracks.length}` : `${state.tracks.length}`} hint="T" open={panel === 'mixer'} onClick={() => toggle('mixer')} />
+          <Tool label="View" value={VIEW_NAMES[prefs.view]} open={panel === 'view'} onClick={() => toggle('view')} />
           <span className="tools-gap" />
           <Tool label="Download" open={panel === 'download'} onClick={() => toggle('download')} />
           <Tool label="Print" hint="P" open={panel === 'print'} onClick={() => toggle('print')} />
@@ -120,7 +122,7 @@ export function PlayerPage({ id, track, theme }: { id: string; track: number | n
         setEntry(song);
         document.title = `${song.title} · Woodshed`;
         const saved = getPrefs().songs[id];
-        eng.load(bytes, track ?? saved?.track ?? song.defaultTrack, saved?.speed ?? 1);
+        eng.load(bytes, track ?? saved?.track ?? song.defaultTrack, saved?.speed ?? 1, saved?.also ?? []);
       } catch (e) {
         if (alive) setLoadError((e as Error).message);
       }
@@ -142,10 +144,10 @@ export function PlayerPage({ id, track, theme }: { id: string; track: number | n
   // Remember the track and speed for this song, and keep the address in step.
   useEffect(() => {
     if (!state || state.status !== 'ready') return;
-    setSongPrefs(id, { track: state.trackIndex, speed: state.speed });
+    setSongPrefs(id, { track: state.trackIndex, speed: state.speed, also: state.also });
     const want = `#/song/${id}/${state.trackIndex}`;
     if (location.hash !== want) history.replaceState(null, '', want);
-  }, [id, state?.status, state?.trackIndex, state?.speed]);
+  }, [id, state?.status, state?.trackIndex, state?.speed, state?.also]);
 
   useEffect(() => {
     if (engine && track !== null) engine.showTrack(track);
@@ -172,6 +174,7 @@ export function PlayerPage({ id, track, theme }: { id: string; track: number | n
       const done = () => e.preventDefault();
 
       if (key === 'Escape') { setPanel(null); return; }
+      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && key === 'k') { toggle('help'); return done(); }
       if (e.ctrlKey && e.shiftKey && (key === 'ArrowUp' || key === 'ArrowDown')) {
         const next = s.trackIndex + (key === 'ArrowDown' ? 1 : -1);
         if (next >= 0 && next < s.tracks.length) engine.showTrack(next);
@@ -253,6 +256,7 @@ export function PlayerPage({ id, track, theme }: { id: string; track: number | n
             {current.tuning && <span className="track-chip-tuning">{current.tuning}</span>}
           </button>
         )}
+        <button type="button" className="icon-btn help-btn" aria-expanded={panel === 'help'} aria-label="Help and keyboard shortcuts" title="Help (Ctrl+K)" onClick={() => toggle('help')}>?</button>
         <button type="button" className={`icon-btn star${favorite ? ' is-on' : ''}`} aria-pressed={favorite}
           aria-label={favorite ? 'Remove from favorites' : 'Add to favorites'} onClick={() => toggleFavorite(id)}>
           <IconStar filled={favorite} />

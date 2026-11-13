@@ -3,13 +3,23 @@ import { useSyncExternalStore } from 'react';
 
 export type Theme = 'device' | 'light' | 'dark';
 
+export type View = 'tab' | 'sheet' | 'both';
+
 export interface SongPrefs {
   track?: number;
   speed?: number;
+  /** Tracks drawn under the lead one. Plan §15.2. */
+  also?: number[];
 }
 
 export interface Prefs {
   theme: Theme;
+  /** Tab, standard notation, or both stacked. Plan §15.1. */
+  view: View;
+  /** Plan §15.3. */
+  multirest: boolean;
+  showDynamics: boolean;
+  showRhythm: boolean;
   /** Tab size, 0.7 to 1.5. */
   scale: number;
   fourBarsPerLine: boolean;
@@ -31,6 +41,10 @@ export interface Prefs {
 const KEY = 'woodshed.prefs.v1';
 const DEFAULTS: Prefs = {
   theme: 'device',
+  view: 'tab',
+  multirest: false,
+  showDynamics: true,
+  showRhythm: true,
   scale: 1,
   fourBarsPerLine: false,
   pageWidth: 1100,

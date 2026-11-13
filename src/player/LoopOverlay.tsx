@@ -16,10 +16,11 @@ export function LoopOverlay({ engine }: { engine: Engine }) {
   const systems = engine.api.boundsLookup?.staffSystems;
   if (!loop.on || !systems) return null;
 
-  // One rectangle per line of tab the loop touches.
+  // One rectangle per line of tab the loop touches. A loop that starts inside a multirest starts at that multirest.
+  const from = engine.drawnBar(loop.startBar)?.index ?? loop.startBar;
   const rects: Rect[] = [];
   for (const system of systems) {
-    const inside = system.bars.filter((b) => b.index >= loop.startBar && b.index <= loop.endBar);
+    const inside = system.bars.filter((b) => b.index >= from && b.index <= loop.endBar);
     if (!inside.length) continue;
     const first = inside[0].realBounds;
     const last = inside[inside.length - 1].realBounds;
