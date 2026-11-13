@@ -1706,5 +1706,12 @@ What he saw, what caused it, what changed. Checked in the browser after.
   YouTube playing, not muted, and the tab on the right bar (bars 2 and 4 at
   3.97 s and 7.97 s).
 
-`npx tsc` clean, `npm test` 36 passing, `npm run build` succeeds. Not
-committed, not deployed.
+`npx tsc` clean, `npm test` 36 passing, `npm run build` succeeds.
+
+### §19.5 Committed, pushed, deployed (2026-11-13)
+
+Slices 2b, 2c, 3a and these fixes went to GitHub as one commit (`1e8de44`)
+and to https://woodshed-black.vercel.app. Checked on the live site: the
+Come As You Are link imported through Vercel with its chord sheet, lyric
+lines and 70 recordings; the song opened on Rhythm Guitar with the full mix
+loaded; its drum track drew; back to the library worked with no errors.
