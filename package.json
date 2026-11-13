@@ -9,8 +9,7 @@
     "preview": "vite preview",
     "typecheck": "tsc",
     "import-songsterr": "node tools/songsterr-import.mjs",
-    "test": "node --experimental-strip-types --disable-warning=ExperimentalWarning --test \"tools/**/*.test.mjs\" \"src/**/*.test.ts\"",
-    "test:gate": "node --experimental-strip-types --disable-warning=ExperimentalWarning tools/test_middleware.mjs"
+    "test": "node --experimental-strip-types --disable-warning=ExperimentalWarning --test \"tools/**/*.test.mjs\" \"src/**/*.test.ts\""
   },
   "dependencies": {
     "@breezystack/lamejs": "1.2.7",

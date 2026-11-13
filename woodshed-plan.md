@@ -5,7 +5,7 @@ paid, with nothing behind a paywall. This file is the running record. Sections
 are numbered so code comments can cite them (`// §7.3`). Add a section before
 building a feature, then record what was verified.
 
-Last updated: 2026-11-10.
+Last updated: 2026-11-12.
 
 ---
 
@@ -458,6 +458,11 @@ Write `probe/` scripts and record results in `FINDINGS.md`.
   shared library is designed and waiting on accounts.
 - 2026-11-11: Hosted copy deployed to Vercel behind a password gate (§14).
   GitHub push waiting on Andrew's sign-in; password waiting on him too.
+- 2026-11-12: Phase 2 cut into three slices. Slice 2a built and checked
+  (§15): sheet and tab+sheet views, several tracks at once, multirest,
+  dynamics and rhythm switches, help panel.
+- 2026-11-12: Code pushed to github.com/AndrewOxenberg/Woodshed. Password
+  gate removed from the hosted copy at Andrew's request (§14.5).
 
 ---
 
@@ -961,7 +966,7 @@ instead.
 - **Songsterr links** go to one serverless function, `/api/songsterr`. It
   runs the §11 importer in a scratch folder and returns `score.gp` plus the
   song's details. It stores nothing.
-- **Password gate.** `middleware.ts` puts a password on every request,
+- **Password gate (removed 2026-11-12, §14.5).** `middleware.ts` put a password on every request,
   static files and the function included, the same way the JAPN trainer
   does: a login form, a 30-day cookie, and HTTP 503 until `SITE_PASSWORD`
   is set in the Vercel dashboard. Two reasons it can't be skipped: the
@@ -1030,3 +1035,167 @@ Waiting on Andrew:
 Not checked yet: that Songsterr answers requests from Vercel's servers.
 That needs the password set; one link through the live site settles it.
 
+
+### §14.5 Gate removed, repo pushed (2026-11-12)
+
+Andrew asked for the password to go and for the code on
+`https://github.com/AndrewOxenberg/Woodshed`.
+
+- `middleware.ts`, its 26 tests (`tools/test_middleware.mjs`) and the
+  `test:gate` script are deleted. The site and `/api/songsterr` now answer
+  anyone with the address.
+- What that changes, as §14.1 warned: anyone who finds the URL can use the
+  function to pull tabs from Songsterr through Vercel, and Andrew's
+  Songsterr permission (§11.2) was for his own use. His call; recorded so
+  it is a known state, not an accident. If it needs closing again, the
+  smallest fix is a gate on `/api/songsterr` only.
+- Kept: the `X-Robots-Tag: noindex, nofollow` header in `vercel.json`, so
+  search engines still don't list it.
+- The repo holds the code, plan, tests and README. Not pushed, by
+  `.gitignore`: `library/` (Songsterr data and his tabs), `.env.local`
+  (Vercel token), `node_modules/`, `dist/`, alphaTab's copied fonts and
+  sounds.
+
+---
+
+## §15 Phase 2, first slice: views and tracks (2026-11-12)
+
+Phase 2 (§7) is too big for one sitting, so it is cut in three. This slice is
+the part alphaTab already knows how to draw. Written before the code.
+
+| Slice | What | State |
+|---|---|---|
+| 2a | Tab / sheet / both views, drum notation, several tracks at once, the three display settings, help panel | built and checked, §15.6 |
+| 2b | Chords view: lyrics with chords, capo, simplify, diagrams, autoscroll, print. Detect chords | not started |
+| 2c | Bar menu, AI track autoswitch, rearrange buttons | not started |
+
+### §15.1 Notation view
+
+A **View** button in the toolbar opens a panel with three choices: Tab,
+Sheet, Both. Saved in prefs, so it carries across songs.
+
+- Tab = alphaTab `StaveProfile.Tab`, Sheet = `Score`, Both = `ScoreTab`.
+- With Both, the rhythm stems under the tab go away (`TabRhythmMode.Automatic`),
+  because the sheet staff above already shows the rhythm.
+- Drum tracks: measured in §15.6. alphaTab draws drums as standard drum
+  notation; whether the Tab choice shows anything for them decides whether
+  Songsterr's "drum notation" switch (Alt+L) needs its own control.
+- Print and Guitar Pro download follow the view on screen.
+
+### §15.2 Several tracks at once
+
+Each row in the Tracks panel gets a **Show** switch. The track picked by
+name is still the lead: it is the one the lead volume, mute key and bass
+filter act on. Shown tracks stack under each other in file order.
+
+- Saved per song, next to the last track.
+- Switching the lead keeps the others shown.
+- The loop highlight, handles, cursor keys and follow scrolling work on
+  whole lines, so they should not care how many staves a line has. To be
+  checked, not assumed.
+
+### §15.3 Display settings
+
+| Setting | alphaTab | Default |
+|---|---|---|
+| Combine empty bars (Songsterr: "Show multirest") | `stylesheet.multiTrackMultiBarRest` and `perTrackMultiBarRest` | off |
+| Show dynamics | `NotationElement.EffectDynamics` | on |
+| Show rhythm under the tab | `TabRhythmMode` shown or hidden | on |
+
+The third is my reading of Songsterr's "Show beat marks". Its settings page
+does not say what a beat mark is and §1 did not open it, so this is the
+nearest thing alphaTab has, named for what it does.
+
+Transpose rebuilds the score from JSON, so the multirest flags have to be
+put back on every rebuild.
+
+### §15.4 Help
+
+A **Help** panel (Ctrl+K, as on Songsterr) holds the shortcut list, which
+moves out of Settings, plus a short "how to" for loop, speed and transpose.
+
+### §15.5 Checks
+
+- Sheet view shows no tab lines; Both shows a five-line staff over the tab
+  on every line; Tab is as before.
+- The cursor, click-to-seek, loop handles and follow scrolling work in all
+  three views and with three tracks shown.
+- A drum track draws drum notation.
+- Multirest on: a run of empty bars becomes one bar with a count, and the
+  bar numbers after it are still right. Loop and the bar readout still land
+  on the right bar.
+- Dynamics off removes every dynamic mark and nothing else.
+- Transpose +2 with multirest on keeps the multirests.
+- Phone width: no sideways page scroll with Both and two tracks.
+- `npx tsc` clean, `npm test` green, `npm run build` succeeds.
+
+### §15.6 Results (2026-11-12)
+
+Built and checked in the browser on Earrings (13 tracks). `npx tsc` clean,
+`npm test` 21 passing, `npm run build` succeeds. Not committed, not deployed.
+
+Views, lead guitar, 1024 px window:
+
+| View | Lines | Staves per line | Staff heights |
+|---|---|---|---|
+| Tab | 11 | 1 | 65 px |
+| Sheet | 13 | 1 | 36 px |
+| Both | 15 | 2 | 36 + 65 px |
+
+- With Both, the stems under the tab go away by themselves. Hammer-on and
+  pull-off letters are drawn on both staves; that is alphaTab's choice.
+- **Drums need no switch.** A drum track draws drum notation in every view,
+  Tab included, so Songsterr's Alt+L has nothing to do here. Left out.
+- Three tracks shown (lead guitar, rhythm guitar, drums) in Both: five
+  staves a line, 29 lines, all 50 bars drawn. The loop highlight covered
+  the full height of each line it touched (563 and 577 px, matching the
+  lines). Seek, beat step, line step and handle hit-testing landed on the
+  right bars.
+- Playing with three tracks shown: the cursor spans all five staves and the
+  current line stayed 16 px from the top through four line changes.
+- Making the bass the lead kept the other two shown, and the song's saved
+  settings held `also: [2, 12]`.
+- Phone width (375 px), Both, three tracks: one bar a line, no sideways
+  page scroll.
+- Ctrl+K opens Help. The **?** button sits in the top bar, not the toolbar,
+  so the toolbar did not grow.
+
+Display settings:
+
+| Setting | Result |
+|---|---|
+| Combine empty bars | 50 drawn bars became 22 on the lead guitar. Off again: 50 |
+| Same, after transpose +2 | still 22, and the bass kept its bass clef |
+| Show dynamics off | two marks gone (510 drawn elements to 508), back on: 510 |
+| Show rhythm off | a line of tab went from 126 to 101 px tall |
+
+Two things the checks turned up, both fixed:
+
+1. **Bars inside a multirest have no place on the page.** alphaTab gives
+   bounds only to the bars it draws, so a loop set on bars 4 to 7 drew no
+   highlight, and follow scrolling and the line keys did nothing there.
+   `Engine.drawnBar()` now answers with the multirest that covers a bar.
+   Checked: the loop on bars 4 to 7 highlights the multirest it sits in
+   while the playback range is still exactly those four bars, and the
+   down-arrow from bar 5 goes to bar 18 on the next line.
+2. **Sheet view was at the wrong octave with the wrong clefs.** Songsterr's
+   data has no clefs, so every staff came out treble at sounding pitch,
+   drums included. On load the engine now gives drums the percussion clef,
+   writes guitars and basses (General MIDI sounds 24 to 39) an octave up as
+   is standard, and gives a bass the bass clef. Voices and keyboards are
+   left alone; Songsterr gives those tracks a guitar tuning too, which is
+   why the rule goes by sound and not by tuning. Uploaded files that carry
+   their own clefs are not touched. Playback and the tab are unchanged.
+
+Not checked, or known gaps:
+
+- Not listened to, and only Chromium.
+- Print and Guitar Pro download in Sheet or Both view were not opened.
+- Sheet view shows no key signature on songs whose Songsterr data has none
+  (Earrings is spelled in sharps).
+- "Show rhythm under the tab" is still a guess at Songsterr's "beat marks"
+  (§15.3).
+- The view is one setting for the whole app, not part of the address, so a
+  link cannot open a song in sheet view.
+- Only Earrings went through these checks. A song with real multi-voice
+  bars or uploaded Guitar Pro clefs has not been looked at in Sheet view.

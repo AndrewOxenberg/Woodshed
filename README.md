@@ -1,75 +1,118 @@
 # Woodshed
 
-A guitar tab player and practice site with every feature Songsterr has, free
-and paid, and no paywall.
+A guitar tab player and practice site. It has the practice tools Songsterr
+sells in its Plus plan (slow down, loop, transpose, solo and mute, count-in,
+metronome, print, download) and none of them are behind a paywall.
 
-**State:** phase 1 of 6 works. That is the practice player: library, tab
-view, speed, loop, transpose, pitch shift, mixer, count-in, metronome,
-settings, print, and downloads. Phases 2 to 6 (other views, original audio,
-editor, accounts, AI transcription) are planned in `woodshed-plan.md` and not
-built.
+**Live:** https://woodshed-black.vercel.app
 
-## Run it
+Built on [alphaTab](https://alphatab.net) for notation and playback, with
+Vite, React and TypeScript around it.
 
-```
+## State
+
+| Phase | What | State |
+|---|---|---|
+| 1 | Practice player: library, tab view, speed, loop, transpose, mixer, count-in, metronome, print, downloads | Done |
+| 2a | Sheet and tab+sheet views, several tracks on the page, display switches, help panel | Done |
+| 2b | Chords view (lyrics with chords, capo, diagrams, autoscroll), detect chords | Next |
+| 2c | Bar menu, track autoswitch, rearrange buttons | Planned |
+| 3 | Play along with the original recording (YouTube or an uploaded file) | Planned |
+| 4 | Tab editor and revisions | Planned |
+| 5 | Accounts and a shared library (Google sign-in, upload limits, admin) | Designed, not built |
+| 6 | AI transcription from audio | Planned |
+
+`woodshed-plan.md` is the plan and the running record: what each feature
+does, why it was built that way, and what was measured in the browser.
+
+## Features
+
+- **Library.** Open a Guitar Pro, MusicXML, alphaTex or plain-text
+  ASCII tab, or paste a Songsterr link. Search, favorites, and a
+  guitar / bass / drums filter. A bass or drum link opens on that track.
+- **Views.** Tab, standard notation, or both stacked. Drums always draw as
+  drum notation. Show extra tracks under the one you are playing.
+- **Speed.** 15% to 175% in 1% steps, set by percent or by BPM. Pitch
+  stays the same.
+- **Loop.** Press L, then drag the handles. Optional count-in before every
+  repeat.
+- **Transpose.** Rewrites every fret and chord name. A second control
+  shifts only the sound, for songs tuned down.
+- **Tracks.** Switch, solo, mute and set volume per track, plus one slider
+  for the track you are playing and one for the rest of the band.
+- **Count-in and metronome.**
+- **Download.** Guitar Pro, MIDI, WAV and MP3, in the current key and mix.
+- **Print.** Black on white, with its own size setting.
+- **Settings.** Light or dark, tab size, note spacing, page width, four
+  bars per line, combine empty bars, dynamics, and a sound delay for
+  Bluetooth headphones.
+
+Press **Ctrl+K** in the player, or the **?** button, for help and the full
+list of keyboard shortcuts.
+
+## Run it locally
+
+Needs Node 22 or newer.
+
+```bash
 npm install
 npm run dev
 ```
 
-Then open http://127.0.0.1:5183. It runs on your own machine only.
+Then open http://127.0.0.1:5183. The local copy keeps its library as
+folders under `library/` on disk, served by a small API inside the Vite dev
+server (`server/library-api.mjs`).
 
-## Hosted copy
+## The hosted copy
 
-https://woodshed-black.vercel.app, behind a password (`SITE_PASSWORD` in the
-Vercel project settings). The hosted copy keeps each person's library in
-their own browser, and imports Songsterr links through one serverless
-function. Deploy with `npx vercel deploy --prod`. Details in plan §14.
+The site on Vercel is the same app built as static files, plus one
+serverless function:
 
-`npm run build && npm run preview` serves the same build locally on port
-4173, without the password.
+- Each browser keeps its own library in IndexedDB. Nothing is shared
+  between visitors yet (that is phase 5).
+- Songsterr links go through `api/songsterr.js`, which runs the importer in
+  a scratch folder and sends back a Guitar Pro file. It stores nothing.
 
-## What it does
+Deploy with:
 
-- **Library.** Open a Guitar Pro, MusicXML, alphaTex or plain-text tab, or
-  paste a Songsterr link. Tabs are saved as folders under `library/`.
-  Filter by guitar, bass or drums; a bass or drum link opens on that track.
-- **Speed.** 15% to 175%, in 1% steps, by percent or by BPM.
-- **Loop.** Press L, then drag the two handles. Bars only.
-- **Transpose.** Rewrites frets and chord names. A separate control shifts
-  the sound only, for songs tuned down.
-- **Tracks.** Switch track, solo, mute, volume per track. Two more sliders
-  set the track on screen against everything else (lead and backing).
-- **Count-in and metronome.** Optional count-in before every loop repeat.
-- **Download.** Guitar Pro, MIDI, WAV, MP3.
-- **Print.** Black on white, with its own size setting.
-- **Settings.** Light or dark, tab size, note spacing, page width, four bars
-  per line, sound delay for Bluetooth headphones.
-
-Keyboard shortcuts are listed at the bottom of the Settings panel.
-
-## Import from the command line
-
+```bash
+npx vercel deploy --prod
 ```
+
+`npm run build && npm run preview` serves the same build locally.
+
+## Importing from Songsterr
+
+The link box in the library does this, or from a terminal:
+
+```bash
 npm run import-songsterr -- "https://www.songsterr.com/a/wsa/malcolm-todd-earrings-tab-s1576708t1/r8752738"
 ```
 
-Same thing the link box does. It saves to
-`library/songsterr/<songId>-r<revisionId>/`: `score.gp` (every track),
-Songsterr's raw data, and `convert-report.json`, which lists any notation
-the converter did not recognise. Andrew has permission from Songsterr for
-this (plan §11.2). `library/` is git-ignored, so imported tabs never get
-pushed.
+It saves to `library/songsterr/<songId>-r<revisionId>/`: `score.gp` with
+every track, Songsterr's raw data, and `convert-report.json`. Notation the
+converter does not recognise is listed in that report and fails `npm test`
+until it is mapped in `tools/songsterr/convert.mjs`. Nothing is guessed.
+
+Songsterr's tabs are licensed from music publishers. The owner of this
+project has permission from Songsterr for these imports (plan §11.2).
+`library/` is git-ignored, so imported tabs are never in this repository.
 
 ## Checks
 
-```
+```bash
 npm test
 npx tsc
+npm run build
 ```
 
-Tests run offline: link parsing, transpose, chord spelling, audio writers,
-and a note-by-note round trip on every song in `library/songsterr/`. The
-browser checks and their numbers are in plan §12.3.
+Tests run offline: Songsterr link parsing, track picking, instrument
+classification, chord spelling, transpose, the WAV writer, MIDI note counts,
+and a note-by-note round trip on every song saved in `library/songsterr/`.
+The tests that need saved songs skip when that folder is empty, as it is in
+a fresh clone.
+The browser checks and their measurements are in the plan, §12.3, §13.5 and
+§15.6.
 
 ## Layout
 
@@ -78,8 +121,15 @@ browser checks and their numbers are in plan §12.3.
 | `woodshed-plan.md` | The plan and the running record |
 | `src/player/engine.ts` | Wraps alphaTab; all playback state |
 | `src/player/` | Player page, panels, loop overlay |
-| `src/library/` | Library page |
-| `src/lib/` | Transpose, chord names, WAV and MIDI helpers, tests |
-| `server/library-api.mjs` | Local library API, served by Vite |
-| `tools/songsterr/` | Link importer and converter |
+| `src/library/` | Library page, and the in-browser store for the hosted copy |
+| `src/lib/` | Transpose, chord names, audio helpers, tests |
+| `server/` | Local library API and the Songsterr request handler |
+| `api/songsterr.js` | The Vercel function (re-exports the handler) |
+| `tools/songsterr/` | Songsterr link importer and converter |
 | `tools/ascii-tab.mjs` | Plain-text tab parser |
+| `tools/instruments.mjs` | Guitar / bass / drums classification |
+
+## License
+
+No license yet: all rights reserved. alphaTab is MPL-2.0 and lamejs is
+LGPL; both are used unmodified from npm.

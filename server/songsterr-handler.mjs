@@ -1,6 +1,6 @@
 // POST /api/songsterr for the hosted copy. Plan §14.1.
 // Runs the §11 importer in a scratch folder and hands back score.gp; nothing is kept.
-// The password gate (middleware.ts) sits in front of it on Vercel.
+// Open to anyone who can reach the site: the password gate was removed on 2026-11-12 (plan §14.5).
 import { readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
