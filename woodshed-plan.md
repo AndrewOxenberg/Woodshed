@@ -1032,8 +1032,8 @@ Waiting on Andrew:
 2. **Sign in to GitHub** in the built-in browser so the private repo can be
    created and pushed. Two commits are ready locally.
 
-Not checked yet: that Songsterr answers requests from Vercel's servers.
-That needs the password set; one link through the live site settles it.
+Answered 2026-11-12 in §14.5: Songsterr answers requests from Vercel's
+servers.
 
 
 ### §14.5 Gate removed, repo pushed (2026-11-12)
@@ -1055,6 +1055,17 @@ Andrew asked for the password to go and for the code on
   `.gitignore`: `library/` (Songsterr data and his tabs), `.env.local`
   (Vercel token), `node_modules/`, `dist/`, alphaTab's copied fonts and
   sounds.
+
+Checked after the deploy (commit fdb5f59):
+
+- The pushed `main` on GitHub is the local HEAD; `git ls-files` holds none
+  of the ignored paths.
+- `https://woodshed-black.vercel.app/` answers 200 with the app, the
+  sound font answers 200 (1.35 MB), and `/api/songsterr` answers 400
+  "Paste a Songsterr link." to an empty request, with no password.
+- **Songsterr does serve Vercel's servers**, the question §14.4 left open:
+  the Earrings link imported through the live site with all 13 tracks and
+  opened in the player, with the phase 2a View and Help buttons present.
 
 ---
 
