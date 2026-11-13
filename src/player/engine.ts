@@ -2,12 +2,17 @@
 // React reads it through subscribe/getState; nothing in here touches React.
 import * as alphaTab from '@coderline/alphatab';
 import { transposeScoreJson } from '../lib/transpose.ts';
+import { prettyChord } from '../lib/chords.ts';
+import { DETECTED_ID, detectedChords } from '../lib/tabSheet.ts';
 import { concatFloat32, encodeWav, toInt16 } from '../lib/audio.ts';
 import type { Prefs } from '../prefs.ts';
 
 export const MIN_SPEED = 0.15;
 export const MAX_SPEED = 1.75;
 const SAMPLE_RATE = 44100;
+const QUARTER = 960;
+/** The speeds a YouTube video can play at (§4.2), inside Woodshed's range. */
+const RECORDING_RATES = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75];
 
 export interface TrackState {
   index: number;
@@ -31,7 +36,10 @@ export interface EngineState {
   title: string;
   artist: string;
   tracks: TrackState[];
+  /** The track on the page, which the lead volume and the M key act on. */
   trackIndex: number;
+  /** The track picked for the song. Autoswitch may show another one for a while (§17.2). */
+  home: number;
   /** Tracks drawn as well as the lead one. Plan §15.2. */
   also: number[];
   barCount: number;
@@ -55,6 +63,10 @@ export interface EngineState {
   backingVolume: number;
   /** Bumps whenever the tab is laid out again, so overlays can re-measure. */
   layout: number;
+  /** Bumps whenever a new score is loaded (first load, transpose), so the chords view rebuilds. */
+  scoreVersion: number;
+  /** A recording is playing along instead of the synth. Plan §18. */
+  external: boolean;
   busy: string | null;
 }
 
@@ -64,6 +76,8 @@ export interface Position {
   ms: number;
   endMs: number;
   bar: number;
+  /** Ticks into the bar being played (that pass of it, with repeats). */
+  barTick: number;
   bpm: number;
 }
 
@@ -79,7 +93,9 @@ export interface ScoreColors {
   line: string;
 }
 
-const PROFILE = { tab: alphaTab.StaveProfile.Tab, sheet: alphaTab.StaveProfile.Score, both: alphaTab.StaveProfile.ScoreTab };
+
+/** Detected chord names: green, readable on light and dark pages. Plan §16.4. */
+const DETECTED_COLOR = '#2f9e5b';
 
 /** Stems under the tab. With the sheet staff above, alphaTab drops them by itself. Plan §15.1, §15.3. */
 function rhythmMode(prefs: Prefs) {
@@ -114,7 +130,7 @@ function delayedCursor(delay: () => number) {
 export class Engine {
   readonly api: alphaTab.AlphaTabApi;
   private state: EngineState;
-  private position: Position = { tick: 0, endTick: 0, ms: 0, endMs: 0, bar: 0, bpm: 120 };
+  private position: Position = { tick: 0, endTick: 0, ms: 0, endMs: 0, bar: 0, barTick: 0, bpm: 120 };
   private listeners = new Set<Listener>();
   private positionListeners = new Set<Listener>();
   private originalJson = '';
@@ -131,6 +147,14 @@ export class Engine {
   private lastSystem = -1;
   private prefs: Prefs;
   private destroyed = false;
+  /** Beats carrying a detected chord name, to clear them again. */
+  private detectedBeats = new Set<alphaTab.model.Beat>();
+  /** Notes each track plays in each bar, for autoswitch. [track][bar] */
+  private barNotes: number[][] = [];
+  /** Bar index -> track to show there, from the bar menu (§17.2). */
+  private switches = new Map<number, number>();
+  /** Start of every bar played, in seconds, for the recording playing along (§18.2). */
+  private recordingPoints: number[] | null = null;
 
   constructor(
     private readonly host: HTMLElement,
@@ -140,17 +164,18 @@ export class Engine {
   ) {
     this.prefs = prefs;
     this.state = {
-      status: 'loading', error: null, title: '', artist: '', tracks: [], trackIndex: 0, also: [], barCount: 0, pickup: false,
+      status: 'loading', error: null, title: '', artist: '', tracks: [], trackIndex: 0, home: 0, also: [], barCount: 0, pickup: false,
       playing: false, soundProgress: 0, playerReady: false, speed: 1,
       loop: { on: false, startBar: 0, endBar: 0 }, countIn: false, metronome: false,
       transpose: 0, transposeMoved: 0, transposeRaised: 0, pitchShift: 0, masterVolume: 0.7,
-      leadVolume: prefs.leadVolume, backingVolume: prefs.backingVolume, layout: 0, busy: null,
+      leadVolume: prefs.leadVolume, backingVolume: prefs.backingVolume, layout: 0, scoreVersion: 0, external: false, busy: null,
     };
 
     this.api = new alphaTab.AlphaTabApi(host, {
       core: { fontDirectory: '/font/', enableLazyLoading: true },
       display: {
-        staveProfile: PROFILE[prefs.view],
+        // Every staff type allowed; each staff's own switches pick tab, notation or both (§19.2).
+        staveProfile: alphaTab.StaveProfile.Default,
         layoutMode: alphaTab.LayoutMode.Page,
         scale: prefs.scale,
         stretchForce: prefs.spacing,
@@ -187,7 +212,8 @@ export class Engine {
     api.scoreLoaded.on((score) => this.onScoreLoaded(score));
     api.postRenderFinished.on(() => {
       this.lastSystem = -1;
-      this.set({ layout: this.state.layout + 1, status: this.state.status === 'error' ? 'error' : 'ready' });
+      // A finished drawing clears an earlier drawing error (§19.2: it used to stick until reload).
+      this.set({ layout: this.state.layout + 1, status: 'ready', error: null });
     });
     api.soundFontLoad.on((e) => this.set({ soundProgress: e.total ? e.loaded / e.total : 0 }));
     api.playerReady.on(() => this.set({ playerReady: true, soundProgress: 1 }));
@@ -240,7 +266,7 @@ export class Engine {
       this.originalJson = alphaTab.model.JsonConverter.scoreToJson(score);
       const index = clamp(trackIndex, 0, score.tracks.length - 1);
       const extra = [...new Set(also)].filter((i) => Number.isInteger(i) && i >= 0 && i < score.tracks.length && i !== index);
-      this.state = { ...this.state, trackIndex: index, also: extra, speed: clamp(speed, MIN_SPEED, MAX_SPEED) };
+      this.state = { ...this.state, trackIndex: index, home: index, also: extra, speed: clamp(speed, MIN_SPEED, MAX_SPEED) };
       this.prepare(score);
       this.api.renderScore(score, this.shown());
     } catch (e) {
@@ -265,13 +291,23 @@ export class Engine {
         volume: old[i]?.volume ?? 1,
       };
     });
+    this.barNotes = score.tracks.map((t) => {
+      const n = new Array<number>(score.masterBars.length).fill(0);
+      for (const staff of t.staves) for (const bar of staff.bars) for (const voice of bar.voices) for (const beat of voice.beats) {
+        if (!beat.isRest) n[bar.index] += beat.notes.filter((x) => !x.isDead).length;
+      }
+      return n;
+    });
     let tempo = score.tempo;
     this.barTempo = score.masterBars.map((mb) => {
       const changes = mb.tempoAutomations;
       if (changes.length) tempo = changes[changes.length - 1].value;
       return tempo;
     });
-    this.set({ title: score.title, artist: score.artist, tracks, barCount: score.masterBars.length, pickup: !!score.masterBars[0]?.isAnacrusis });
+    this.set({
+      title: score.title, artist: score.artist, tracks, barCount: score.masterBars.length,
+      pickup: !!score.masterBars[0]?.isAnacrusis, scoreVersion: this.state.scoreVersion + 1,
+    });
   }
 
   private onMidiLoaded() {
@@ -291,6 +327,8 @@ export class Engine {
     // Loading MIDI resets alphaTab's sequencer, including any leftover count-in.
     this.staleCountIn = false;
     this.countingIn = false;
+    // alphaTab hands the player its own sync points right after this event, so ours go in just after.
+    if (this.recordingPoints) queueMicrotask(() => this.applySync());
     if (this.playAfterLoad) {
       this.playAfterLoad = false;
       api.play();
@@ -334,10 +372,86 @@ export class Engine {
     }
   }
 
+  /**
+   * Which staves each track draws, for the view. alphaTab's Tab profile draws tab staves only,
+   * so a drum track (no tab) alone on the page had nothing to draw and alphaTab crashed (§19.2).
+   * Instead each staff says what it shows: drums always drum notation, fretted tracks tab,
+   * notation or both, anything without strings notation.
+   */
+  private setStaves(score: alphaTab.model.Score) {
+    const view = this.prefs.view;
+    for (const track of score.tracks) {
+      for (const staff of track.staves) {
+        const fretted = !staff.isPercussion && staff.tuning.length > 0;
+        staff.showSlash = false;
+        staff.showNumbered = false;
+        staff.showTablature = fretted && view !== 'sheet';
+        staff.showStandardNotation = !fretted || view === 'sheet' || view === 'both';
+      }
+    }
+  }
+
   /** Everything a freshly built score needs before it is drawn. */
   private prepare(score: alphaTab.model.Score) {
+    this.setStaves(score);
     this.setMultirest(score);
     this.setClefs(score);
+    this.applyDetected(score);
+  }
+
+  /**
+   * Detect chords: green names above the lead track's tab, in bars that name no chord of their
+   * own. Cleared and worked out again whenever the lead track or the notes change. Plan §16.4.
+   */
+  private applyDetected(score: alphaTab.model.Score) {
+    for (const beat of this.detectedBeats) {
+      beat.chordId = null;
+      beat.style = undefined;
+    }
+    this.detectedBeats.clear();
+    for (const track of score.tracks) {
+      for (const staff of track.staves) {
+        if (staff.chords) for (const id of [...staff.chords.keys()]) if (id.startsWith(DETECTED_ID)) staff.chords.delete(id);
+      }
+    }
+    if (!this.prefs.detectChords) return;
+    const track = score.tracks[this.state.trackIndex];
+    const staff = track?.staves[0];
+    if (!staff || staff.isPercussion) return;
+    const green = alphaTab.model.Color.fromJson(DETECTED_COLOR)!;
+    for (const e of detectedChords(track, score)) {
+      const bar = staff.bars[e.bar];
+      if (!bar || bar.voices.some((v) => v.beats.some((b) => b.hasChord))) continue;
+      const beat = bar.voices[0].beats.find((b) => b.playbackStart >= e.offset && b.graceType === alphaTab.model.GraceType.None);
+      if (!beat) continue;
+      const name = prettyChord(e.name);
+      const id = DETECTED_ID + name;
+      if (!staff.hasChord(id)) {
+        const chord = new alphaTab.model.Chord();
+        chord.name = name;
+        chord.showDiagram = false;
+        staff.addChord(id, chord);
+      }
+      beat.chordId = id;
+      // Colours only the band above the staff (chord names and other beat marks), not the notes.
+      beat.style = new alphaTab.model.BeatStyle();
+      beat.style.colors.set(alphaTab.model.BeatSubElement.Effects, green);
+      this.detectedBeats.add(beat);
+    }
+  }
+
+  /** Run fn on the score as written, without detected names (for downloads). */
+  private withoutDetected<T>(fn: () => T): T {
+    const score = this.api.score;
+    if (!score || !this.prefs.detectChords) return fn();
+    this.prefs = { ...this.prefs, detectChords: false };
+    this.applyDetected(score);
+    try {
+      return fn();
+    } finally {
+      this.prefs = { ...this.prefs, detectChords: true };
+      this.applyDetected(score);
+    }
   }
 
   private track(i: number) {
@@ -381,14 +495,18 @@ export class Engine {
   private onPosition(tick: number, endTick: number, ms: number, endMs: number) {
     // alphaTab reports no positions during a count-in, so the first one means it is over.
     if (this.state.playing) this.countingIn = false;
-    const bar = this.barAt(tick);
+    const passIndex = this.passIndexAt(tick);
+    const pass = this.bars[passIndex];
+    const bar = pass?.index ?? 0;
     // alphaTab's times are already wall-clock times at the current speed (measured in §12.3).
-    this.position = { tick, endTick, ms, endMs, bar, bpm: (this.barTempo[bar] ?? 120) * this.state.speed };
+    this.position = { tick, endTick, ms, endMs, bar, barTick: tick - (pass?.start ?? 0), bpm: (this.barTempo[bar] ?? 120) * this.state.speed };
     this.positionListeners.forEach((l) => l());
+    if (this.state.playing && this.prefs.autoswitch) this.autoswitch(passIndex, tick);
     this.follow(bar, false);
   }
 
-  private barAt(tick: number): number {
+  /** Which pass through a bar a playback tick falls in (a repeated bar has one per repeat). */
+  private passIndexAt(tick: number): number {
     const bars = this.bars;
     let lo = 0;
     let hi = bars.length - 1;
@@ -397,7 +515,21 @@ export class Engine {
       if (bars[mid].start <= tick) lo = mid;
       else hi = mid - 1;
     }
-    return bars[lo]?.index ?? 0;
+    return lo;
+  }
+
+  private passAt(tick: number): BarSpan | undefined {
+    return this.bars[this.passIndexAt(tick)];
+  }
+
+  private barAt(tick: number): number {
+    return this.passAt(tick)?.index ?? 0;
+  }
+
+  /** Put the cursor this many ticks into a bar (its first pass). For chords on the chord sheet. */
+  seekBar(bar: number, offset = 0) {
+    const span = this.span(bar);
+    if (span) this.seekTick(span.start + offset);
   }
 
   /** Tick span of a bar the first time it is played. */
@@ -409,6 +541,11 @@ export class Engine {
     if (!this.state.playerReady) return;
     this.followPaused = false;
     this.lastSystem = -1;
+    if (this.state.external) {
+      // A recording has no count-in; the video starts at once.
+      this.api.play();
+      return;
+    }
     if (this.staleCountIn && !this.state.countIn) {
       // Reloading the MIDI is the only way to drop the half-played count-in. Found in §12.3.
       this.staleCountIn = false;
@@ -500,8 +637,15 @@ export class Engine {
   }
 
   setSpeed(speed: number) {
-    const s = clamp(Math.round(speed * 100) / 100, MIN_SPEED, MAX_SPEED);
+    let s = clamp(Math.round(speed * 100) / 100, MIN_SPEED, MAX_SPEED);
     const old = this.state.speed;
+    if (this.state.external) {
+      // YouTube plays only its own rates (§4.2): step to the next one in the direction asked.
+      const up = RECORDING_RATES.filter((r) => r > old + 1e-9);
+      const down = RECORDING_RATES.filter((r) => r < old - 1e-9);
+      s = s > old ? (up[0] ?? old) : s < old ? (down[down.length - 1] ?? old) : old;
+      if (Math.abs(speed - old) > 0.2) s = RECORDING_RATES.reduce((a, b) => (Math.abs(b - speed) < Math.abs(a - speed) ? b : a));
+    }
     this.api.playbackSpeed = s;
     this.set({ speed: s });
     // No position event arrives while paused, so rescale the clock here.
@@ -588,11 +732,70 @@ export class Engine {
 
   // ---- tracks ------------------------------------------------------------
 
+  /** Pick the song's track. */
   showTrack(index: number) {
-    if (!this.api.score || index === this.state.trackIndex || !this.track(index)) return;
-    this.set({ trackIndex: index, also: this.state.also.filter((i) => i !== index) });
+    if (!this.api.score || !this.track(index)) return;
+    if (index === this.state.trackIndex) {
+      if (index !== this.state.home) this.set({ home: index });
+      return;
+    }
+    this.set({ home: index, also: this.state.also.filter((i) => i !== index) });
+    this.showPart(index);
+  }
+
+  /** Put a track on the page without changing the song's pick (autoswitch). */
+  private showPart(index: number) {
+    if (!this.api.score || !this.track(index)) return;
+    this.set({ trackIndex: index });
     this.applyVolumes(); // a different track is the lead now
+    if (this.prefs.detectChords) this.applyDetected(this.api.score);
     this.api.renderTracks(this.shown().map((i) => this.track(i)));
+  }
+
+  // ---- track autoswitch (§17.2) --------------------------------------------
+
+  private family(i: number): string | null {
+    const t = this.api.score?.tracks[i];
+    if (!t || t.staves[0]?.isPercussion) return null;
+    const p = t.playbackInfo.program;
+    return p >= 24 && p <= 31 ? 'guitar' : p >= 32 && p <= 39 ? 'bass' : 'other';
+  }
+
+  /** Tracks that can carry the picked track's part: the same kind of instrument, never drums. */
+  partTracks(): number[] {
+    const kind = this.family(this.state.home);
+    if (!kind) return [this.state.home];
+    return this.state.tracks.map((t) => t.index).filter((i) => this.family(i) === kind);
+  }
+
+  /** The track to show in a bar: the menu's choice, else the picked track if it plays, else the busiest other. */
+  partFor(bar: number): number {
+    const { home, trackIndex } = this.state;
+    const group = this.partTracks();
+    const forced = this.switches.get(bar);
+    if (forced !== undefined && group.includes(forced)) return forced;
+    const n = (i: number) => this.barNotes[i]?.[bar] ?? 0;
+    if (n(home) > 0) return home;
+    const playing = group.filter((i) => i !== home && n(i) > 0);
+    if (!playing.length) return group.includes(trackIndex) ? trackIndex : home; // nobody plays: stay put
+    if (playing.includes(trackIndex)) return trackIndex;
+    return playing.reduce((a, b) => (n(b) > n(a) ? b : a));
+  }
+
+  /** Bar menu choices for this song, bar index -> track. */
+  setSwitches(map: Record<string, number> | undefined) {
+    this.switches = new Map(Object.entries(map ?? {}).map(([bar, track]) => [Number(bar), track]));
+  }
+
+  private autoswitch(passIndex: number, tick: number) {
+    const pass = this.bars[passIndex];
+    const score = this.api.score;
+    if (!pass || !score) return;
+    // Switch a beat early, so the redrawn page is up when the bar starts (§17.2).
+    const beat = (QUARTER * 4) / score.masterBars[pass.index].timeSignatureDenominator;
+    const next = this.bars[passIndex + 1];
+    const target = next && tick >= pass.end - beat ? this.partFor(next.index) : this.partFor(pass.index);
+    if (target !== this.state.trackIndex) this.showPart(target);
   }
 
   /** Draw another track under the lead one, or stop drawing it. Plan §15.2. */
@@ -647,6 +850,65 @@ export class Engine {
     this.set({});
   }
 
+  // ---- playing along with a recording (§18) --------------------------------
+
+  /**
+   * Play along with a recording: points are the start of every bar played, in seconds; the
+   * handler drives the video. Null for both goes back to the synth.
+   */
+  useRecording(points: number[] | null, handler: alphaTab.synth.IExternalMediaHandler | null) {
+    // The video's box can close after the page has (back to the library): nothing left to switch.
+    if (this.destroyed) return;
+    const external = !!points && !!handler;
+    if (this.state.playing) this.pause();
+    this.recordingPoints = external ? points : null;
+    const settings = this.api.settings.player;
+    const mode = external ? alphaTab.PlayerMode.EnabledExternalMedia : alphaTab.PlayerMode.EnabledSynthesizer;
+    if (settings.playerMode !== mode) {
+      this.pendingTick = this.api.tickPosition;
+      settings.playerMode = mode;
+      this.set({ external, playerReady: external });
+      this.api.updateSettings();
+      if (external) this.attach(handler);
+      this.api.loadMidiForScore();
+      if (!external) this.applyMixer();
+    } else if (external) {
+      this.attach(handler);
+      this.applySync();
+    }
+    // Snap the speed to a rate the video has.
+    if (external && !RECORDING_RATES.includes(this.state.speed)) this.setSpeed(this.state.speed + 0.5);
+  }
+
+  private attach(handler: alphaTab.synth.IExternalMediaHandler | null) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const output = (this.api.player as any)?.output;
+    if (output && 'handler' in output) output.handler = handler ?? undefined;
+  }
+
+  /** The recording's current time, in milliseconds. Called every 50 ms while it plays. */
+  mediaTime(ms: number) {
+    if (this.destroyed) return;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (this.api.player as any)?.output?.updatePosition?.(ms);
+  }
+
+  /** One sync point per bar played: which bar, which pass through it, and when it starts. */
+  private applySync() {
+    const score = this.api.score;
+    const points = this.recordingPoints;
+    if (!score || !points || !this.bars.length) return;
+    const passes = new Map<number, number>();
+    const flat: alphaTab.model.FlatSyncPoint[] = [];
+    this.bars.forEach((bar, i) => {
+      const pass = passes.get(bar.index) ?? 0;
+      passes.set(bar.index, pass + 1);
+      if (i < points.length) flat.push({ barIndex: bar.index, barOccurence: pass, barPosition: 0, millisecondOffset: Math.round(points[i] * 1000) });
+    });
+    score.applyFlatSyncPoints(flat);
+    this.api.updateSyncPoints();
+  }
+
   // ---- appearance --------------------------------------------------------
 
   private resources(c: ScoreColors) {
@@ -666,14 +928,17 @@ export class Engine {
     const notation = this.api.settings.notation;
     const dynamics = alphaTab.NotationElement.EffectDynamics;
     const multirest = before.multirest !== prefs.multirest;
-    if (colorsChanged || multirest || display.scale !== prefs.scale || display.barsPerRow !== bars || display.stretchForce !== prefs.spacing
-      || display.staveProfile !== PROFILE[prefs.view] || notation.rhythmMode !== rhythmMode(prefs)
+    const detect = before.detectChords !== prefs.detectChords;
+    if (detect && this.api.score) this.applyDetected(this.api.score);
+    const view = before.view !== prefs.view;
+    if (view && this.api.score) this.setStaves(this.api.score);
+    if (colorsChanged || multirest || detect || view || display.scale !== prefs.scale || display.barsPerRow !== bars || display.stretchForce !== prefs.spacing
+      || notation.rhythmMode !== rhythmMode(prefs)
       || (notation.elements.get(dynamics) ?? true) !== prefs.showDynamics) {
       for (const [k, v] of Object.entries(wanted)) (res as unknown as Record<string, alphaTab.model.Color>)[k] = color(v);
       display.scale = prefs.scale;
       display.barsPerRow = bars;
       display.stretchForce = prefs.spacing;
-      display.staveProfile = PROFILE[prefs.view];
       notation.rhythmMode = rhythmMode(prefs);
       notation.elements.set(dynamics, prefs.showDynamics);
       if (multirest && this.api.score) this.setMultirest(this.api.score);
@@ -681,11 +946,15 @@ export class Engine {
       this.api.render();
     }
     if (before.countInBetweenLoops !== prefs.countInBetweenLoops) this.applyLoop();
+    // Autoswitch off: back to the picked track.
+    if (before.autoswitch && !prefs.autoswitch && this.state.trackIndex !== this.state.home) this.showPart(this.state.home);
   }
 
   // ---- follow scrolling (§3.1) ---------------------------------------------
 
   private follow(bar: number, force: boolean) {
+    // The chords view scrolls its own sheet.
+    if (this.prefs.view === 'chords') return;
     const lookup = this.api.boundsLookup;
     const system = this.drawnBar(bar)?.staffSystemBounds;
     if (!lookup || !system) return;
@@ -729,7 +998,8 @@ export class Engine {
   }
 
   exportGuitarPro(): Uint8Array {
-    return new alphaTab.exporter.Gp7Exporter().export(this.api.score!, this.api.settings);
+    // Detected names are a suggestion on screen, not part of the song.
+    return this.withoutDetected(() => new alphaTab.exporter.Gp7Exporter().export(this.api.score!, this.api.settings));
   }
 
   /** Render the song offline at 44.1 kHz with the current mixer. Returns interleaved stereo samples. */

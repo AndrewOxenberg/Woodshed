@@ -1,7 +1,7 @@
 // Fetch a Songsterr tab by link and save the raw data. Plan §11.
 import { mkdir, readFile, writeFile, access } from 'node:fs/promises';
 import { join } from 'node:path';
-import { trackForLink } from '../instruments.mjs';
+import { popularTrack, trackForLink } from '../instruments.mjs';
 
 const CDN = 'https://dqsljvtekg760.cloudfront.net';
 const ORIGIN = 'https://www.songsterr.com';
@@ -47,6 +47,70 @@ function readState(html) {
 
 const exists = (p) => access(p).then(() => true, () => false);
 
+// Songsterr's chord sheets (plan §16.1): ChordPro text, the same file from any of these.
+const CHORDPRO_HOSTS = [
+  'https://chordpro1.songsterr.com',
+  'https://chordpro2.songsterr.com',
+  'https://chordpro3.songsterr.com',
+  `${ORIGIN}/cdn/chordpro`,
+];
+
+/**
+ * Save the song's chord sheet as chords.chordpro, with chords.json describing it.
+ * A failure is logged and left for the next import to retry; it never fails the import.
+ */
+async function fetchChordSheet(songId, dir, log) {
+  try {
+    await sleep(PAUSE_MS);
+    const res = await fetch(`${ORIGIN}/api/chords/${songId}`, { headers: { 'User-Agent': CLIENT } });
+    if (res.status === 404) {
+      // Songsterr has no sheet for this song: remember that, so re-imports don't ask again.
+      await writeFile(join(dir, 'chords.json'), JSON.stringify({ songId, none: true }, null, 2));
+      return;
+    }
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const info = await res.json();
+    if (!info?.chordpro || !info?.chordsRevisionId) throw new Error('no sheet named in the reply');
+    const path = `${songId}/${info.chordsRevisionId}/${info.chordpro}.chordpro`;
+    for (const host of CHORDPRO_HOSTS) {
+      await sleep(PAUSE_MS);
+      try {
+        // Served gzip-compressed; fetch unpacks it.
+        const text = await (await get(`${host}/${path}`, 'chord sheet')).text();
+        if (!text.trim() || text.includes(String.fromCharCode(0))) continue;
+        await writeFile(join(dir, 'chords.chordpro'), text);
+        await writeFile(join(dir, 'chords.json'), JSON.stringify({
+          songId, chordsRevisionId: info.chordsRevisionId, chordpro: info.chordpro, fetchedAt: new Date().toISOString(),
+        }, null, 2));
+        log(`  chord sheet: revision ${info.chordsRevisionId} (${text.length} characters)`);
+        return;
+      } catch {
+        // try the next host
+      }
+    }
+    throw new Error('no host served it');
+  } catch (e) {
+    log(`  chord sheet skipped: ${e.message}`);
+  }
+}
+
+/** A song saved before chord sheets were imported gets its sheet now (one extra request). */
+async function ensureChordSheet(dir, log) {
+  const meta = JSON.parse(await readFile(join(dir, 'meta.json'), 'utf8'));
+  if (!meta.hasChords || (await exists(join(dir, 'chords.chordpro'))) || (await exists(join(dir, 'chords.json')))) return;
+  log('Fetching the chord sheet this saved song is missing...');
+  await fetchChordSheet(meta.songId, dir, log);
+}
+
+/** Songsterr's chord sheet for a saved song, or null. */
+export async function readChordSheet(dir) {
+  try {
+    return await readFile(join(dir, 'chords.chordpro'), 'utf8');
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Fetch everything for one link into library/songsterr/<songId>-r<revisionId>/.
  * Skips the network if that revision is already saved.
@@ -59,6 +123,7 @@ export async function fetchSong(link, libraryRoot, log = console.log) {
     const dir = join(libraryRoot, 'songsterr', `${parsed.songId}-r${parsed.revisionId}`);
     if (await exists(join(dir, 'source.json'))) {
       log(`Already saved: ${dir}`);
+      await ensureChordSheet(dir, log);
       return { dir, parsed, cached: true };
     }
   }
@@ -80,6 +145,7 @@ export async function fetchSong(link, libraryRoot, log = console.log) {
   const dir = join(libraryRoot, 'songsterr', `${cur.songId}-r${cur.revisionId}`);
   if (await exists(join(dir, 'source.json'))) {
     log(`Already saved: ${dir}`);
+    await ensureChordSheet(dir, log);
     return { dir, parsed, cached: true };
   }
   await mkdir(join(dir, 'tracks'), { recursive: true });
@@ -103,6 +169,7 @@ export async function fetchSong(link, libraryRoot, log = console.log) {
   } catch (e) {
     log(`  video points skipped: ${e.message}`);
   }
+  if (cur.hasChords) await fetchChordSheet(cur.songId, dir, log);
 
   // Written last: its presence means the folder is complete.
   await writeFile(
@@ -112,7 +179,7 @@ export async function fetchSong(link, libraryRoot, log = console.log) {
         link,
         songId: cur.songId,
         revisionId: cur.revisionId,
-        linkedTrack: trackForLink(parsed, cur) ?? cur.defaultTrack ?? 0,
+        linkedTrack: trackForLink(parsed, cur) ?? popularTrack(cur),
         title: cur.title,
         artist: cur.artist,
         fetchedAt: new Date().toISOString(),

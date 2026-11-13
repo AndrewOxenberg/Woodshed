@@ -3,17 +3,18 @@ import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { MAX_SPEED, MIN_SPEED, saveBytes, type Engine } from './engine.ts';
 import { setPrefs, usePrefs, type Theme, type View } from '../prefs.ts';
 import { IconClose } from '../ui/icons.tsx';
+import { TOOL_NAMES, toolOrder } from './tools.ts';
 
-export type PanelName = 'speed' | 'transpose' | 'mixer' | 'view' | 'download' | 'print' | 'settings' | 'help';
+export type PanelName = 'speed' | 'transpose' | 'mixer' | 'view' | 'download' | 'print' | 'settings' | 'help' | 'recording';
 
-export const VIEW_NAMES: Record<View, string> = { tab: 'Tab', sheet: 'Sheet', both: 'Both' };
+export const VIEW_NAMES: Record<View, string> = { tab: 'Tab', sheet: 'Sheet', both: 'Both', chords: 'Chords' };
 
 const useEngine = (engine: Engine) => useSyncExternalStore(engine.subscribe, engine.getState);
 const usePosition = (engine: Engine) => useSyncExternalStore(engine.subscribePosition, engine.getPosition);
 const signed = (n: number) => (n > 0 ? `+${n}` : `${n}`);
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
 
-function Panel({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) {
+export function Panel({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) {
   const ref = useRef<HTMLElement>(null);
   useEffect(() => ref.current?.focus(), []);
   return (
@@ -64,6 +65,7 @@ function SpeedPanel({ engine, onClose }: { engine: Engine; onClose: () => void }
         ))}
       </div>
       <p className="hint">The song is written at {Math.round(base)} bpm here. Pitch stays the same at any speed.</p>
+      {state.external && <p className="note">A recording is playing, so the speed moves in YouTube's steps: 25% to 175% in quarters.</p>}
     </Panel>
   );
 }
@@ -90,6 +92,7 @@ function TransposePanel({ engine, onClose }: { engine: Engine; onClose: () => vo
         downLabel="Sound one semitone lower" upLabel="Sound one semitone higher"
         onDown={() => engine.setPitchShift(p - 1)} onUp={() => engine.setPitchShift(p + 1)} />
       <p className="hint">The tab stays as written. Use it when the song is tuned down and your guitar isn't: for a song in E♭, shift +1.</p>
+      {state.external && <p className="note">This changes the synth only. A YouTube recording can't be pitch-shifted.</p>}
       <button type="button" className="btn" disabled={p === 0} onClick={() => engine.setPitchShift(0)}>Sound as written</button>
     </Panel>
   );
@@ -97,10 +100,12 @@ function TransposePanel({ engine, onClose }: { engine: Engine; onClose: () => vo
 
 function MixerPanel({ engine, onClose, onPick }: { engine: Engine; onClose: () => void; onPick: (index: number) => void }) {
   const state = useEngine(engine);
+  const prefs = usePrefs();
   const lead = state.tracks[state.trackIndex];
   const pct = (v: number) => `${Math.round(v * 100)}%`;
   return (
     <Panel title="Tracks" onClose={onClose}>
+      {state.external && <p className="note">A recording is playing: these sliders, solo and mute change the synth only.</p>}
       <label className="field">
         <span>Overall volume <output>{pct(state.masterVolume)}</output></span>
         <input type="range" className="slider" min={0} max={1} step={0.01} value={state.masterVolume}
@@ -120,6 +125,12 @@ function MixerPanel({ engine, onClose, onPick }: { engine: Engine; onClose: () =
       )}
       <hr />
       {state.tracks.length > 1 && <p className="hint">Pick a name to make it the lead track. Show draws another track under it.</p>}
+      {engine.partTracks().length > 1 && (
+        <label className="check">
+          <input type="checkbox" checked={prefs.autoswitch} onChange={(e) => setPrefs({ autoswitch: e.target.checked })} />
+          <span>Follow the part across tracks <span className="hint">(while playing, show another {state.tracks[state.home]?.percussion ? '' : 'track of the same kind'} where the picked one rests)</span></span>
+        </label>
+      )}
       <ul className="tracks">
         {state.tracks.map((t) => {
           const shown = t.index === state.trackIndex;
@@ -127,7 +138,7 @@ function MixerPanel({ engine, onClose, onPick }: { engine: Engine; onClose: () =
             <li key={t.index} className={`track${shown ? ' is-shown' : ''}`}>
               <button type="button" className="track-pick" aria-pressed={shown} onClick={() => onPick(t.index)}>
                 <span className="track-name">{t.name}</span>
-                <span className="track-sub">{t.percussion ? 'Drums' : t.tuning}{shown ? ' · lead' : ''}</span>
+                <span className="track-sub">{t.percussion ? 'Drums' : t.tuning}{shown ? ' · lead' : ''}{t.index === state.home && !shown ? ' · picked' : ''}</span>
               </button>
               <button type="button" className="toggle toggle-wide" aria-pressed={shown || state.also.includes(t.index)} disabled={shown}
                 aria-label={`Show ${t.name} on the page`} title={shown ? 'This is the track on screen' : 'Show this track as well'}
@@ -184,6 +195,19 @@ function PrintPanel({ engine, onClose }: { engine: Engine; onClose: () => void }
   const [error, setError] = useState<string | null>(null);
   const pct = Math.round(prefs.printScale * 100);
   const set = (v: number) => setPrefs({ printScale: Math.min(1.5, Math.max(0.5, v / 100)) });
+  if (prefs.view === 'chords') {
+    // Plan §16.3: the chord sheet prints through the browser, with a print stylesheet.
+    return (
+      <Panel title="Print" onClose={onClose}>
+        <Stepper label="Size on paper" value={`${pct}%`} downLabel="Smaller print" upLabel="Larger print" onDown={() => set(pct - 10)} onUp={() => set(pct + 10)} />
+        <button type="button" className="btn btn-primary" onClick={() => {
+          document.documentElement.style.setProperty('--print-scale', String(prefs.printScale));
+          window.print();
+        }}>Print the chord sheet</button>
+        <p className="hint">Prints the sheet as it is on screen (key, capo, simplify, diagrams) in black on white.</p>
+      </Panel>
+    );
+  }
   return (
     <Panel title="Print" onClose={onClose}>
       <Stepper label="Size on paper" value={`${pct}%`} downLabel="Smaller print" upLabel="Larger print" onDown={() => set(pct - 10)} onUp={() => set(pct + 10)} />
@@ -205,7 +229,7 @@ const SHORTCUTS: [string, string][] = [
   ['Space', 'Play or pause'], ['Backspace', 'Back to the loop start, or the top'], ['Double-click', 'Play from that beat'],
   ['← →', 'Move one beat'], ['↑ ↓', 'Move one line'], ['L', 'Loop on or off'], ['Shift + ← →', 'Move the loop end'],
   ['S', 'Speed'], ['K', 'Transpose'], ['T', 'Tracks'], ['Ctrl + Shift + ↑ ↓', 'Previous or next track'], ['Alt + Shift + 1–9', 'Jump to a track'],
-  ['M', 'Mute this track'], ['Alt + M', 'Solo this track'], ['C', 'Count-in'], ['N', 'Metronome'], ['P', 'Print'], ['Ctrl + K', 'Help'], ['Esc', 'Close a panel'],
+  ['V', 'Synth or recording'], ['M', 'Mute this track'], ['Alt + M', 'Solo this track'], ['C', 'Count-in'], ['N', 'Metronome'], ['P', 'Print'], ['Ctrl + K', 'Help'], ['Esc', 'Close a panel'],
 ];
 
 function SettingsPanel({ onClose }: { onClose: () => void }) {
@@ -259,16 +283,52 @@ function SettingsPanel({ onClose }: { onClose: () => void }) {
           onChange={(e) => setPrefs({ latencyMs: Number(e.target.value) })} />
       </label>
       <p className="hint">Raise this if the sound arrives after the cursor, which is common with Bluetooth headphones. It holds the cursor back to match.</p>
+      <hr />
+      <Rearrange />
     </Panel>
+  );
+}
+
+/** Settings: the toolbar's buttons in order, moved with buttons or by dragging. Plan §17.3. */
+function Rearrange() {
+  const prefs = usePrefs();
+  const order = toolOrder(prefs.toolOrder);
+  const [dragging, setDragging] = useState<number | null>(null);
+  const moveTo = (from: number, to: number) => {
+    if (to < 0 || to >= order.length || from === to) return;
+    const next = [...order];
+    const [id] = next.splice(from, 1);
+    next.splice(to, 0, id);
+    setPrefs({ toolOrder: next });
+  };
+  return (
+    <div className="rearrange">
+      <h3>Rearrange buttons</h3>
+      <ol>
+        {order.map((id, i) => (
+          <li key={id} draggable className={dragging === i ? 'is-dragging' : undefined}
+            onDragStart={(e) => { setDragging(i); e.dataTransfer.effectAllowed = 'move'; }}
+            onDragOver={(e) => e.preventDefault()}
+            onDrop={(e) => { e.preventDefault(); if (dragging !== null) moveTo(dragging, i); setDragging(null); }}
+            onDragEnd={() => setDragging(null)}>
+            <span className="rearrange-grip" aria-hidden="true">⠿</span>
+            <span className="rearrange-name">{TOOL_NAMES[id]}</span>
+            <button type="button" className="step-sm" aria-label={`Move ${TOOL_NAMES[id]} earlier`} disabled={i === 0} onClick={() => moveTo(i, i - 1)}>↑</button>
+            <button type="button" className="step-sm" aria-label={`Move ${TOOL_NAMES[id]} later`} disabled={i === order.length - 1} onClick={() => moveTo(i, i + 1)}>↓</button>
+          </li>
+        ))}
+      </ol>
+      <button type="button" className="btn" disabled={!prefs.toolOrder.length} onClick={() => setPrefs({ toolOrder: [] })}>Reset order</button>
+    </div>
   );
 }
 
 function ViewPanel({ onClose }: { onClose: () => void }) {
   const prefs = usePrefs();
-  const views: [View, string][] = [['tab', 'Tab'], ['sheet', 'Sheet'], ['both', 'Both']];
+  const views: [View, string][] = [['tab', 'Tab'], ['sheet', 'Sheet'], ['both', 'Both'], ['chords', 'Chords']];
   return (
     <Panel title="View" onClose={onClose}>
-      <fieldset className="segmented">
+      <fieldset className="segmented segmented-4">
         <legend>Notation</legend>
         {views.map(([value, label]) => (
           <label key={value}>
@@ -277,7 +337,11 @@ function ViewPanel({ onClose }: { onClose: () => void }) {
           </label>
         ))}
       </fieldset>
-      <p className="hint">Tab shows fret numbers. Sheet shows standard notation. Both stacks them.</p>
+      <p className="hint">Tab shows fret numbers. Sheet shows standard notation. Both stacks them. Chords shows the words with chord names over them.</p>
+      <label className="check">
+        <input type="checkbox" checked={prefs.detectChords} onChange={(e) => setPrefs({ detectChords: e.target.checked })} />
+        <span>Detect chords <span className="detected-key">(green names above the tab)</span></span>
+      </label>
       <label className="check">
         <input type="checkbox" checked={prefs.showRhythm} onChange={(e) => setPrefs({ showRhythm: e.target.checked })} />
         <span>Show rhythm under the tab</span>
@@ -303,6 +367,9 @@ function HelpPanel({ onClose }: { onClose: () => void }) {
         <div><dt>Change key</dt><dd>Press K. "Move the tab" rewrites the frets. "Shift the sound" keeps the frets and changes what you hear.</dd></div>
         <div><dt>Hear less of the band</dt><dd>Press T. Turn the backing down, or use S and M on a track to solo or mute it.</dd></div>
         <div><dt>See sheet music or more tracks</dt><dd>View switches between tab and sheet. Show in the Tracks panel adds a track to the page.</dd></div>
+        <div><dt>Play along with the band</dt><dd>Recording (or V) swaps the synth for the song's YouTube recording: the full mix, a backing track without your part, or a playthrough. The tab follows the video.</dd></div>
+        <div><dt>One bar at a time</dt><dd>The ⋮ under a bar loops it, plays from it, or picks which track it shows when a part is split over two tracks.</dd></div>
+        <div><dt>Strum along</dt><dd>View, then Chords: the words with the chords over them. Capo, Simplify, Diagrams and Autoscroll sit above the sheet. Detect chords names the chords in a tab that has none.</dd></div>
       </dl>
       <hr />
       <div className="shortcuts">

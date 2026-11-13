@@ -2,12 +2,14 @@
 // The local app (npm run dev) uses the library/ folder on disk instead (server/library-api.mjs).
 import * as alphaTab from '@coderline/alphatab';
 import { parseAsciiTab } from '../../tools/ascii-tab.mjs';
-import { scoreInstruments } from '../../tools/instruments.mjs';
-import type { Instrument, SongEntry } from '../api.ts';
+import { defaultTrack, scoreInstruments } from '../../tools/instruments.mjs';
+import { NO_EXTRAS, type Instrument, type SongEntry, type SongExtras } from '../api.ts';
 
 const DB = 'woodshed';
 const SONGS = 'songs';
 const SCORES = 'scores';
+/** Chord sheet and lyric line starts per song (plan §16.2). Added in version 2. */
+const EXTRAS = 'extras';
 const MAX_UPLOAD = 25 * 1024 * 1024;
 
 const FORMATS: Record<string, string> = {
@@ -20,10 +22,12 @@ let opening: Promise<IDBDatabase> | null = null;
 
 function db(): Promise<IDBDatabase> {
   opening ??= new Promise((resolve, reject) => {
-    const req = indexedDB.open(DB, 1);
+    const req = indexedDB.open(DB, 2);
     req.onupgradeneeded = () => {
-      req.result.createObjectStore(SONGS, { keyPath: 'id' });
-      req.result.createObjectStore(SCORES);
+      const names = req.result.objectStoreNames;
+      if (!names.contains(SONGS)) req.result.createObjectStore(SONGS, { keyPath: 'id' });
+      if (!names.contains(SCORES)) req.result.createObjectStore(SCORES);
+      if (!names.contains(EXTRAS)) req.result.createObjectStore(EXTRAS);
     };
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => {
@@ -44,11 +48,17 @@ function run<T>(stores: string[], mode: IDBTransactionMode, work: (tx: IDBTransa
   }));
 }
 
-async function save(entry: SongEntry, score: Uint8Array) {
-  await run([SONGS, SCORES], 'readwrite', (tx) => {
+async function save(entry: SongEntry, score: Uint8Array, extras: SongExtras = NO_EXTRAS) {
+  await run([SONGS, SCORES, EXTRAS], 'readwrite', (tx) => {
     tx.objectStore(SONGS).put(entry);
     tx.objectStore(SCORES).put(score, entry.id);
+    tx.objectStore(EXTRAS).put(extras, entry.id);
   });
+}
+
+export async function getExtras(id: string): Promise<SongExtras> {
+  const extras = await run<SongExtras | undefined>([EXTRAS], 'readonly', (tx) => tx.objectStore(EXTRAS).get(id));
+  return extras ?? NO_EXTRAS;
 }
 
 export async function listSongs(): Promise<SongEntry[]> {
@@ -69,9 +79,10 @@ export async function getScore(id: string): Promise<Uint8Array> {
 }
 
 export async function deleteSong(id: string): Promise<{ ok: true }> {
-  await run([SONGS, SCORES], 'readwrite', (tx) => {
+  await run([SONGS, SCORES, EXTRAS], 'readwrite', (tx) => {
     tx.objectStore(SONGS).delete(id);
     tx.objectStore(SCORES).delete(id);
+    tx.objectStore(EXTRAS).delete(id);
   });
   return { ok: true };
 }
@@ -125,7 +136,7 @@ export async function uploadFile(file: File): Promise<{ entry: SongEntry }> {
     title,
     artist: score.artist?.trim() ?? '',
     tracks: score.tracks.length,
-    defaultTrack: 0,
+    defaultTrack: defaultTrack(scoreInstruments(score), score.tracks.length),
     instruments: scoreInstruments(score) as Record<Instrument, number[]>,
     addedAt: new Date().toISOString(),
     format,
@@ -139,6 +150,7 @@ export async function uploadFile(file: File): Promise<{ entry: SongEntry }> {
 interface SongsterrReply {
   entry: Omit<SongEntry, 'addedAt'>;
   gp: string;
+  extras?: SongExtras;
   track: number | null;
   problems: string[];
   unknown: number;
@@ -158,6 +170,6 @@ export async function importSongsterr(link: string) {
   const bytes = new Uint8Array(bin.length);
   for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
   const entry: SongEntry = { ...body.entry, addedAt: new Date().toISOString() };
-  await save(entry, bytes);
+  await save(entry, bytes, body.extras ?? NO_EXTRAS);
   return { entry, track: body.track ?? null, problems: body.problems ?? [], unknown: body.unknown ?? 0 };
 }

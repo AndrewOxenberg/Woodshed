@@ -60,3 +60,68 @@ export function transposeChord(name: string, semitones: number, spelling: Spelli
   const bass = c.bass === null ? '' : `/${noteName(mod12(c.bass + semitones), spelling)}`;
   return `${root}${c.quality}${bass}`;
 }
+
+/** Name a pitch class on its own, e.g. for a chord root found by Detect chords. */
+export const pitchName = (pc: number, spelling: Spelling) => noteName(mod12(pc), spelling);
+
+// ---- chord qualities (plan §16.3, §16.4) ------------------------------------------------
+
+/** Intervals above the root, by the quality names Woodshed writes. */
+export const QUALITIES: Record<string, number[]> = {
+  '': [0, 4, 7], m: [0, 3, 7], '5': [0, 7], dim: [0, 3, 6], aug: [0, 4, 8],
+  sus2: [0, 2, 7], sus4: [0, 5, 7], '6': [0, 4, 7, 9], m6: [0, 3, 7, 9],
+  '7': [0, 4, 7, 10], maj7: [0, 4, 7, 11], m7: [0, 3, 7, 10], m7b5: [0, 3, 6, 10], dim7: [0, 3, 6, 9],
+  '7sus4': [0, 5, 7, 10], add9: [0, 2, 4, 7], madd9: [0, 2, 3, 7],
+  '9': [0, 2, 4, 7, 10], m9: [0, 2, 3, 7, 10], maj9: [0, 2, 4, 7, 11], mmaj7: [0, 3, 7, 11],
+  '69': [0, 2, 4, 7, 9], '7b9': [0, 1, 4, 7, 10], '7#9': [0, 3, 4, 7, 10], aug7: [0, 4, 8, 10],
+  '11': [0, 2, 5, 7, 10], '13': [0, 4, 7, 9, 10],
+};
+
+/** Other ways the same qualities get written, Songsterr's "D7M" included. */
+const ALIASES: Record<string, string> = {
+  M: '', maj: '', major: '', min: 'm', mi: 'm', '-': 'm', o: 'dim', '°': 'dim', '+': 'aug', '#5': 'aug',
+  sus: 'sus4', '4': 'sus4', '2': 'sus2', add2: 'add9', madd2: 'madd9', m2: 'madd9',
+  M7: 'maj7', '7M': 'maj7', Δ: 'maj7', Δ7: 'maj7', ma7: 'maj7', j7: 'maj7',
+  min7: 'm7', mi7: 'm7', '-7': 'm7', ø: 'm7b5', ø7: 'm7b5', 'm7-5': 'm7b5', o7: 'dim7', '°7': 'dim7',
+  '7sus': '7sus4', M9: 'maj9', '9M': 'maj9', '6/9': '69', '6add9': '69', mM7: 'mmaj7', 'm/maj7': 'mmaj7',
+  '7+': 'aug7', '+7': 'aug7', '7#5': 'aug7', m11: '11',
+};
+
+/** A quality written any common way, in Woodshed's spelling. Unknown ones come back as null. */
+export function normalQuality(quality: string): string | null {
+  const q = quality.replace(/♭/g, 'b').replace(/♯/g, '#').replace(/[()\s]/g, '');
+  if (q in QUALITIES) return q;
+  if (q in ALIASES) return ALIASES[q];
+  return null;
+}
+
+/** Intervals for any quality. Unknown ones fall back to their triad, plus a seventh when one is written. */
+export function intervalsOf(quality: string): number[] {
+  const q = normalQuality(quality);
+  if (q !== null) return QUALITIES[q];
+  const third = isMinor(quality) ? 3 : 4;
+  const seventh = /maj7|M7/.test(quality) ? [11] : /7|9|11|13/.test(quality) ? [10] : [];
+  return [0, third, 7, ...seventh];
+}
+
+/** The triad a chord simplifies to: "", "m", "5", "dim" or "aug". */
+export function simpleQuality(quality: string): string {
+  const iv = intervalsOf(quality);
+  if (iv.length === 2 && iv[1] === 7) return '5';
+  if (iv.includes(3) && !iv.includes(4)) return iv.includes(6) && !iv.includes(7) ? 'dim' : 'm';
+  if (iv.includes(8) && !iv.includes(7)) return 'aug';
+  return '';
+}
+
+const SPLIT = /^([A-G][#b♯♭]?)([^/]*)(?:\/([A-G][#b♯♭]?))?$/;
+
+/** E♭madd9 -> E♭m, C/E -> C. Names that don't parse come back unchanged. Plan §16.3. */
+export function simplifyChord(name: string): string {
+  const m = name.trim().match(SPLIT);
+  return m ? `${m[1]}${simpleQuality(m[2])}` : name;
+}
+
+/** Chord names with sharp and flat signs instead of # and b, the way the page shows them. */
+export function prettyChord(name: string): string {
+  return name.replace(/#/g, '♯').replace(/(?<=[A-G])b/g, '♭');
+}

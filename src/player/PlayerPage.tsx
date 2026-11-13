@@ -1,10 +1,14 @@
 // The practice player: tab, transport bar, panels, keyboard shortcuts. Plan §3.1, §3.19.
-import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
-import { getScore, getSong, type SongEntry } from '../api.ts';
+import { Fragment, useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { getExtras, getScore, getSong, openingTrack, type Recording, type SongEntry } from '../api.ts';
 import { getPrefs, setSongPrefs, toggleFavorite, usePrefs } from '../prefs.ts';
+import { RecordingPanel, VideoBox, fullMixes, offered, recordingLabel } from './Recording.tsx';
 import { IconBack, IconPause, IconPlay, IconRestart, IconStar } from '../ui/icons.tsx';
 import { Engine, barNumber, type ScoreColors } from './engine.ts';
 import { LoopOverlay } from './LoopOverlay.tsx';
+import { ChordsView } from './ChordsView.tsx';
+import { BarMenu } from './BarMenu.tsx';
+import { toolOrder, type ToolId } from './tools.ts';
 import { PanelHost, VIEW_NAMES, type PanelName } from './panels.tsx';
 
 function readColors(): ScoreColors {
@@ -30,7 +34,9 @@ function Tool({ label, value, hint, pressed, open, onClick }: {
   );
 }
 
-function Transport({ engine, panel, toggle }: { engine: Engine; panel: PanelName | null; toggle: (p: PanelName) => void }) {
+function Transport({ engine, panel, toggle, recording }: {
+  engine: Engine; panel: PanelName | null; toggle: (p: PanelName) => void; recording: { has: boolean; label: string };
+}) {
   const state = useSyncExternalStore(engine.subscribe, engine.getState);
   const pos = useSyncExternalStore(engine.subscribePosition, engine.getPosition);
   const prefs = usePrefs();
@@ -42,6 +48,22 @@ function Transport({ engine, panel, toggle }: { engine: Engine; panel: PanelName
   const key = state.transpose || state.pitchShift
     ? [state.transpose ? `tab ${state.transpose > 0 ? '+' : ''}${state.transpose}` : '', state.pitchShift ? `sound ${state.pitchShift > 0 ? '+' : ''}${state.pitchShift}` : ''].filter(Boolean).join(', ')
     : 'original';
+
+  const tools: Record<ToolId, React.ReactNode> = {
+    speed: <Tool label="Speed" value={`${Math.round(state.speed * 100)}%`} hint="S" open={panel === 'speed'} onClick={() => toggle('speed')} />,
+    loop: <Tool label="Loop" value={!loop.on ? 'off' : loop.startBar === loop.endBar ? `bar ${num(loop.startBar)}` : `bars ${num(loop.startBar)}–${num(loop.endBar)}`}
+      hint="L" pressed={loop.on} onClick={() => engine.toggleLoop()} />,
+    countin: <Tool label="Count-in" value={state.external ? 'synth only' : state.countIn ? 'on' : 'off'} hint="C" pressed={state.countIn && !state.external} onClick={() => engine.setCountIn(!state.countIn)} />,
+    metronome: <Tool label="Metronome" value={state.external ? 'synth only' : state.metronome ? 'on' : 'off'} hint="N" pressed={state.metronome && !state.external} onClick={() => engine.setMetronome(!state.metronome)} />,
+    transpose: <Tool label="Transpose" value={key} hint="K" open={panel === 'transpose'} onClick={() => toggle('transpose')} />,
+    tracks: <Tool label="Tracks" value={state.also.length ? `${state.also.length + 1} of ${state.tracks.length}` : `${state.tracks.length}`} hint="T" open={panel === 'mixer'} onClick={() => toggle('mixer')} />,
+    view: <Tool label="View" value={VIEW_NAMES[prefs.view]} open={panel === 'view'} onClick={() => toggle('view')} />,
+    recording: recording.has ? <Tool label="Recording" value={recording.label} hint="V" pressed={state.external} open={panel === 'recording'} onClick={() => toggle('recording')} /> : null,
+    gap: <span className="tools-gap" />,
+    download: <Tool label="Download" open={panel === 'download'} onClick={() => toggle('download')} />,
+    print: <Tool label="Print" hint="P" open={panel === 'print'} onClick={() => toggle('print')} />,
+    settings: <Tool label="Settings" open={panel === 'settings'} onClick={() => toggle('settings')} />,
+  };
 
   const seek = (e: React.PointerEvent<HTMLDivElement>) => {
     const box = e.currentTarget.getBoundingClientRect();
@@ -79,18 +101,8 @@ function Transport({ engine, panel, toggle }: { engine: Engine; panel: PanelName
           </div>
         </div>
         <div className="tools">
-          <Tool label="Speed" value={`${Math.round(state.speed * 100)}%`} hint="S" open={panel === 'speed'} onClick={() => toggle('speed')} />
-          <Tool label="Loop" value={!loop.on ? 'off' : loop.startBar === loop.endBar ? `bar ${num(loop.startBar)}` : `bars ${num(loop.startBar)}–${num(loop.endBar)}`}
-            hint="L" pressed={loop.on} onClick={() => engine.toggleLoop()} />
-          <Tool label="Count-in" value={state.countIn ? 'on' : 'off'} hint="C" pressed={state.countIn} onClick={() => engine.setCountIn(!state.countIn)} />
-          <Tool label="Metronome" value={state.metronome ? 'on' : 'off'} hint="N" pressed={state.metronome} onClick={() => engine.setMetronome(!state.metronome)} />
-          <Tool label="Transpose" value={key} hint="K" open={panel === 'transpose'} onClick={() => toggle('transpose')} />
-          <Tool label="Tracks" value={state.also.length ? `${state.also.length + 1} of ${state.tracks.length}` : `${state.tracks.length}`} hint="T" open={panel === 'mixer'} onClick={() => toggle('mixer')} />
-          <Tool label="View" value={VIEW_NAMES[prefs.view]} open={panel === 'view'} onClick={() => toggle('view')} />
-          <span className="tools-gap" />
-          <Tool label="Download" open={panel === 'download'} onClick={() => toggle('download')} />
-          <Tool label="Print" hint="P" open={panel === 'print'} onClick={() => toggle('print')} />
-          <Tool label="Settings" open={panel === 'settings'} onClick={() => toggle('settings')} />
+          {/* In the order chosen in Settings (§17.3). */}
+          {toolOrder(prefs.toolOrder).map((id) => <Fragment key={id}>{tools[id]}</Fragment>)}
         </div>
       </div>
     </footer>
@@ -106,6 +118,20 @@ export function PlayerPage({ id, track, theme }: { id: string; track: number | n
   const [entry, setEntry] = useState<SongEntry | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [panel, setPanel] = useState<PanelName | null>(null);
+  const [hoverBar, setHoverBar] = useState<number | null>(null);
+  const playingVideo = useRef<string | null>(null);
+  const [videos, setVideos] = useState<Recording[]>([]);
+  // Full-mix uploads that failed to play this visit; the default moves on to the next (§19.4).
+  const [failed, setFailed] = useState<string[]>([]);
+  useEffect(() => {
+    let alive = true;
+    setVideos([]);
+    setFailed([]);
+    getExtras(id).then((x) => alive && setVideos(x.videos ?? []));
+    return () => {
+      alive = false;
+    };
+  }, [id]);
   const toggle = (p: PanelName) => setPanel((now) => (now === p ? null : p));
 
   // Create the engine once per song and load the tab into it.
@@ -122,7 +148,7 @@ export function PlayerPage({ id, track, theme }: { id: string; track: number | n
         setEntry(song);
         document.title = `${song.title} · Woodshed`;
         const saved = getPrefs().songs[id];
-        eng.load(bytes, track ?? saved?.track ?? song.defaultTrack, saved?.speed ?? 1, saved?.also ?? []);
+        eng.load(bytes, track ?? openingTrack(song, saved?.track), saved?.speed ?? 1, saved?.also ?? []);
       } catch (e) {
         if (alive) setLoadError((e as Error).message);
       }
@@ -144,10 +170,16 @@ export function PlayerPage({ id, track, theme }: { id: string; track: number | n
   // Remember the track and speed for this song, and keep the address in step.
   useEffect(() => {
     if (!state || state.status !== 'ready') return;
-    setSongPrefs(id, { track: state.trackIndex, speed: state.speed, also: state.also });
-    const want = `#/song/${id}/${state.trackIndex}`;
+    // The picked track, not one autoswitch is showing for a few bars (§17.2).
+    setSongPrefs(id, { track: state.home, speed: state.speed, also: state.also });
+    const want = `#/song/${id}/${state.home}`;
     if (location.hash !== want) history.replaceState(null, '', want);
-  }, [id, state?.status, state?.trackIndex, state?.speed, state?.also]);
+  }, [id, state?.status, state?.home, state?.speed, state?.also]);
+
+  const switches = prefs.songs[id]?.switches;
+  useEffect(() => {
+    engine?.setSwitches(switches);
+  }, [engine, switches]);
 
   useEffect(() => {
     if (engine && track !== null) engine.showTrack(track);
@@ -176,7 +208,7 @@ export function PlayerPage({ id, track, theme }: { id: string; track: number | n
       if (key === 'Escape') { setPanel(null); return; }
       if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && key === 'k') { toggle('help'); return done(); }
       if (e.ctrlKey && e.shiftKey && (key === 'ArrowUp' || key === 'ArrowDown')) {
-        const next = s.trackIndex + (key === 'ArrowDown' ? 1 : -1);
+        const next = s.home + (key === 'ArrowDown' ? 1 : -1);
         if (next >= 0 && next < s.tracks.length) engine.showTrack(next);
         return done();
       }
@@ -186,6 +218,13 @@ export function PlayerPage({ id, track, theme }: { id: string; track: number | n
         return done();
       }
       if (e.altKey && key === 'm') { engine.setSolo(s.trackIndex, !s.tracks[s.trackIndex]?.solo); return done(); }
+      if (plain && key === 'v' && videos.length) {
+        // Songsterr's V: synth or recording (§18.3).
+        const song = getPrefs().songs[id] ?? {};
+        const back = song.lastVideo && videos.some((v) => v.videoId === song.lastVideo) ? song.lastVideo : offered(videos)[0].videoId;
+        setSongPrefs(id, playingVideo.current ? { video: null } : { video: back, lastVideo: back });
+        return done();
+      }
       if (!plain) return;
       // A focused slider keeps its own arrow keys. Space is always play/pause; Enter still presses a focused button.
       const onControl = !!t.closest('button, a, [role=slider], input, summary');
@@ -234,16 +273,24 @@ export function PlayerPage({ id, track, theme }: { id: string; track: number | n
       window.removeEventListener('keydown', onKey);
       window.removeEventListener('keyup', onKeyUp);
     };
-  }, [engine, panel]);
+  }, [engine, panel, videos, id]);
 
   const title = state?.title || entry?.title || '';
   const artist = state?.artist || entry?.artist || '';
   const current = state?.tracks[state.trackIndex];
   const favorite = prefs.favorites.includes(id);
   const problem = loadError ?? (state?.status === 'error' ? state.error : null);
+  const chords = prefs.view === 'chords';
+  // The recording plays by default: a song never set to Synth gets its first full mix that plays (§19.4).
+  const savedVideo = prefs.songs[id]?.video;
+  const byDefault = savedVideo === undefined;
+  const chosenVideo = byDefault ? fullMixes(videos).find((v) => !failed.includes(v.videoId))?.videoId ?? null : savedVideo;
+  const recording = videos.find((v) => v.videoId === chosenVideo) ?? null;
+  playingVideo.current = recording?.videoId ?? null;
+  const recordingName = recording && state ? recordingLabel(recording, state.tracks, videos) : 'Synth';
 
   return (
-    <div className="player" ref={page}>
+    <div className={`player${chords ? ' is-chords' : ''}`} ref={page}>
       <header className="topbar">
         <a className="back" href="#/" aria-label="Back to the library"><IconBack /><span className="back-label">Library</span></a>
         <div className="song-id">
@@ -271,18 +318,35 @@ export function PlayerPage({ id, track, theme }: { id: string; track: number | n
           </div>
         )}
         {!problem && state?.status !== 'ready' && <p className="score-message" role="status">Drawing the tab…</p>}
-        <div className="score-page" style={{ maxWidth: prefs.pageWidth }}>
-          <div className="score-wrap">
+        {/* Plan §16.3: the chord sheet replaces the tab on screen; the tab stays laid out, hidden, for the loop and keys. */}
+        {chords && engine && state?.status === 'ready' && <ChordsView engine={engine} songId={id} scroller={scroller} />}
+        <div className="score-page" style={{ maxWidth: prefs.pageWidth }} aria-hidden={chords || undefined}>
+          <div className="score-wrap"
+            onPointerMove={(e) => {
+              if (!engine || e.pointerType === 'touch') return;
+              // On its own button or menu the bar stays put, or the button would run from the pointer.
+              if ((e.target as HTMLElement).closest('.bar-menu-layer button, .bar-menu')) return;
+              const box = e.currentTarget.getBoundingClientRect();
+              setHoverBar(engine.barAtPoint(e.clientX - box.left, e.clientY - box.top));
+            }}
+            onPointerLeave={() => setHoverBar(null)}>
             <div className="score-host" ref={host} onDoubleClick={() => engine?.play()} />
             {engine && <LoopOverlay engine={engine} />}
+            {engine && !chords && <BarMenu engine={engine} songId={id} hoverBar={hoverBar} />}
           </div>
         </div>
       </main>
 
-      {engine && panel && (
+      {engine && panel && panel !== 'recording' && (
         <PanelHost name={panel} engine={engine} onClose={() => setPanel(null)} onPickTrack={(i) => engine.showTrack(i)} />
       )}
-      {engine && <Transport engine={engine} panel={panel} toggle={toggle} />}
+      {engine && panel === 'recording' && <RecordingPanel engine={engine} songId={id} videos={videos} current={chosenVideo} onClose={() => setPanel(null)} />}
+      {engine && recording && state?.status === 'ready' && (
+        <VideoBox key={recording.videoId} engine={engine} recording={recording} label={recordingName}
+          onFail={byDefault ? () => setFailed((f) => [...f, recording.videoId]) : undefined}
+          onClose={() => setSongPrefs(id, { video: null })} />
+      )}
+      {engine && <Transport engine={engine} panel={panel} toggle={toggle} recording={{ has: videos.length > 0, label: recordingName }} />}
     </div>
   );
 }

@@ -3,13 +3,25 @@ import { useSyncExternalStore } from 'react';
 
 export type Theme = 'device' | 'light' | 'dark';
 
-export type View = 'tab' | 'sheet' | 'both';
+export type View = 'tab' | 'sheet' | 'both' | 'chords';
+
+export type SheetSource = 'songsterr' | 'tab';
 
 export interface SongPrefs {
   track?: number;
   speed?: number;
   /** Tracks drawn under the lead one. Plan §15.2. */
   also?: number[];
+  /** Chords view: capo fret, or 'auto'. Plan §16.3. */
+  capo?: number | 'auto';
+  /** Chords view: Songsterr's sheet or the one built from the tab. */
+  sheetSource?: SheetSource;
+  /** Track autoswitch: the track to show in a bar, by bar index, chosen in the bar menu. Plan §17.2. */
+  switches?: Record<string, number>;
+  /** The YouTube recording playing along (video id), or none for the synth. Plan §18.3. */
+  video?: string | null;
+  /** The last recording used, for the V key. */
+  lastVideo?: string;
 }
 
 export interface Prefs {
@@ -20,6 +32,17 @@ export interface Prefs {
   multirest: boolean;
   showDynamics: boolean;
   showRhythm: boolean;
+  /** Green chord names above the tab where it has none. Plan §16.4. */
+  detectChords: boolean;
+  /** Chords view. Plan §16.3. */
+  simplifyChords: boolean;
+  showDiagrams: boolean;
+  /** Autoscroll speed, 0.25 to 3. */
+  autoscrollSpeed: number;
+  /** Follow the part across tracks during playback. Plan §17.2. */
+  autoswitch: boolean;
+  /** Toolbar buttons in the order chosen in Settings. Plan §17.3. Empty: the default order. */
+  toolOrder: string[];
   /** Tab size, 0.7 to 1.5. */
   scale: number;
   fourBarsPerLine: boolean;
@@ -45,6 +68,12 @@ const DEFAULTS: Prefs = {
   multirest: false,
   showDynamics: true,
   showRhythm: true,
+  detectChords: false,
+  simplifyChords: false,
+  showDiagrams: false,
+  autoscrollSpeed: 1,
+  autoswitch: false,
+  toolOrder: [],
   scale: 1,
   fourBarsPerLine: false,
   pageWidth: 1100,

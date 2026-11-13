@@ -52,3 +52,19 @@ export function trackForLink(parsed, meta) {
   }
   return null;
 }
+
+/** A song's opening track from its instruments: the first guitar, else the first track that isn't drums. Plan §19.3. */
+export function defaultTrack(instruments, count) {
+  if (instruments.guitar?.length) return instruments.guitar[0];
+  for (let i = 0; i < count; i++) if (!instruments.drums?.includes(i)) return i;
+  return 0;
+}
+
+/** Songsterr's most played guitar track, else its most played track if that isn't drums, else defaultTrack. */
+export function popularTrack(meta) {
+  const kinds = songsterrInstruments(meta);
+  const valid = (i) => Number.isInteger(i) && i >= 0 && i < meta.tracks.length;
+  if (valid(meta.popularTrackGuitar) && !kinds.drums.includes(meta.popularTrackGuitar)) return meta.popularTrackGuitar;
+  if (valid(meta.popularTrack) && !kinds.drums.includes(meta.popularTrack)) return meta.popularTrack;
+  return defaultTrack(kinds, meta.tracks.length);
+}

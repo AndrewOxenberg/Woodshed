@@ -1,6 +1,6 @@
 // The library: every saved tab, plus the two ways to add one. Plan §3.15, §11, §12.1.
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { deleteSong, importSongsterr, listSongs, uploadFile, type Instrument, type SongEntry } from '../api.ts';
+import { deleteSong, importSongsterr, listSongs, openingTrack, uploadFile, type Instrument, type SongEntry } from '../api.ts';
 import { setSongPrefs, toggleFavorite, usePrefs } from '../prefs.ts';
 import { IconStar, IconTrash } from '../ui/icons.tsx';
 
@@ -48,7 +48,7 @@ export function Library() {
 
   /** The track a song opens on. With an instrument filter on, that instrument's track. */
   const trackFor = (s: SongEntry): number => {
-    const remembered = prefs.songs[s.id]?.track ?? s.defaultTrack;
+    const remembered = openingTrack(s, prefs.songs[s.id]?.track, instrument === 'drums');
     if (instrument === 'all') return remembered;
     const tracks = s.instruments[instrument];
     return tracks.includes(remembered) ? remembered : tracks[0];

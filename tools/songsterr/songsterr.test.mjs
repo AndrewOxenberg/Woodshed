@@ -6,9 +6,10 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as aT from '@coderline/alphatab';
 import { parseLink, readSaved } from './fetch.mjs';
-import { scoreInstruments, songsterrInstruments, trackForLink } from '../instruments.mjs';
+import { defaultTrack, popularTrack, scoreInstruments, songsterrInstruments, trackForLink } from '../instruments.mjs';
 import { parseAsciiTab } from '../ascii-tab.mjs';
 import { toScore, toGuitarPro, loadGuitarPro, countNotes, rawNoteCounts } from './convert.mjs';
+import { lyricLines, songLyricLines } from './lyrics.mjs';
 
 const SONGS = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'library', 'songsterr');
 
@@ -122,3 +123,60 @@ if (saved.includes('14-r9744332')) {
     assert.ok(letRing);
   });
 }
+
+test('lyricLines: same chunks as alphaTab, line and verse starts marked', () => {
+  const text = 'Used to sp-end my\nLi-quor was  the\n\n[chorus]You+are a-way';
+  const { chunks, starts, stanzas } = lyricLines(text);
+  const ly = new aT.model.Lyrics();
+  ly.text = text;
+  ly.finish();
+  assert.deepEqual(chunks, ly.chunks);
+  assert.deepEqual(chunks.slice(0, 5), ['Used', 'to', 'sp-', 'end', 'my']);
+  assert.equal(chunks[starts[0]], 'Li-');
+  assert.equal(chunks[stanzas[0]], 'You are');
+});
+
+test('lyricLines: every saved song with words splits exactly as alphaTab does', async () => {
+  let songs = [];
+  try {
+    songs = await readdir(SONGS);
+  } catch {
+    return;
+  }
+  for (const folder of songs) {
+    const { tracks } = await readSaved(join(SONGS, folder));
+    const lines = songLyricLines(tracks);
+    for (const [i, { starts }] of Object.entries(lines)) {
+      const text = tracks[i].newLyrics.find((l) => l.text?.trim()).text;
+      const ly = new aT.model.Lyrics();
+      ly.text = text;
+      ly.finish();
+      assert.deepEqual(lyricLines(text).chunks, ly.chunks, `${folder} track ${i}`);
+      assert.equal(starts.length + 1, text.split('\n').filter((l) => l.trim()).length, `${folder} track ${i} line count`);
+    }
+  }
+});
+
+test('popularTrack: the most played guitar track, never drums (plan §19.3)', () => {
+  const t = (instrument, isDrums = false) => ({ instrument, isDrums });
+  const meta = { tracks: [t('Vocals'), t('Electric Guitar'), t('Drums', true)], popularTrack: 2, popularTrackGuitar: 1 };
+  assert.equal(popularTrack(meta), 1);
+  assert.equal(popularTrack({ ...meta, popularTrackGuitar: undefined }), songsterrInstruments(meta).guitar[0] ?? 0);
+  assert.notEqual(popularTrack({ ...meta, popularTrackGuitar: undefined }), 2);
+  assert.equal(defaultTrack({ guitar: [], bass: [], drums: [0], other: [1] }, 2), 1);
+  assert.equal(defaultTrack({ guitar: [3], bass: [], drums: [0], other: [] }, 4), 3);
+});
+
+test('popularTrack: every saved song opens on its most played guitar track', async () => {
+  let songs = [];
+  try {
+    songs = await readdir(SONGS);
+  } catch {
+    return;
+  }
+  for (const folder of songs) {
+    const { meta } = await readSaved(join(SONGS, folder));
+    const pick = popularTrack(meta);
+    assert.ok(!songsterrInstruments(meta).drums.includes(pick), `${folder} opens on drums`);
+  }
+});

@@ -5,7 +5,7 @@ paid, with nothing behind a paywall. This file is the running record. Sections
 are numbered so code comments can cite them (`// §7.3`). Add a section before
 building a feature, then record what was verified.
 
-Last updated: 2026-11-12.
+Last updated: 2026-11-13.
 
 ---
 
@@ -463,6 +463,15 @@ Write `probe/` scripts and record results in `FINDINGS.md`.
   dynamics and rhythm switches, help panel.
 - 2026-11-12: Code pushed to github.com/AndrewOxenberg/Woodshed. Password
   gate removed from the hosted copy at Andrew's request (§14.5).
+- 2026-11-13: Songsterr's Chords view measured: it is a separate ChordPro
+  sheet, not the tab. Slice 2b designed (§16), built and checked (§16.6).
+  Slice 2c (bar menu, track autoswitch, rearrange buttons) designed and
+  built (§17.5). Phase 2 is done. Phase 3 cut in two; 3a (YouTube sync with
+  Songsterr's points) designed, built and checked (§18.5). Not committed,
+  not deployed.
+- 2026-11-13: Andrew's report: blank page on the way back to the library,
+  a crash on drum tracks, no audio on bake shop, songs opening on drums.
+  Fixed, with the recording now playing by default (§19).
 
 ---
 
@@ -1077,8 +1086,8 @@ the part alphaTab already knows how to draw. Written before the code.
 | Slice | What | State |
 |---|---|---|
 | 2a | Tab / sheet / both views, drum notation, several tracks at once, the three display settings, help panel | built and checked, §15.6 |
-| 2b | Chords view: lyrics with chords, capo, simplify, diagrams, autoscroll, print. Detect chords | not started |
-| 2c | Bar menu, AI track autoswitch, rearrange buttons | not started |
+| 2b | Chords view: lyrics with chords, capo, simplify, diagrams, autoscroll, print. Detect chords | built and checked, §16.6 |
+| 2c | Bar menu, AI track autoswitch, rearrange buttons | built and checked, §17.5 |
 
 ### §15.1 Notation view
 
@@ -1210,3 +1219,492 @@ Not checked, or known gaps:
   link cannot open a song in sheet view.
 - Only Earrings went through these checks. A song with real multi-voice
   bars or uploaded Guitar Pro clefs has not been looked at in Sheet view.
+
+---
+
+## §16 Phase 2, second slice: chords view and detect chords (2026-11-13)
+
+Written before the code, after opening Songsterr's Chords view on Come As
+You Are in the browser.
+
+### §16.1 What Songsterr does (measured 2026-11-13)
+
+- **The Chords view is not drawn from the tab.** It is a separate,
+  hand-written sheet in ChordPro text with its own revision number.
+  `/api/chords/{songId}` names it, and it is served from
+  `https://chordpro1.songsterr.com/{songId}/{chordsRevisionId}/{chordpro}.chordpro`
+  (gzip, so a plain `curl` shows bytes; `fetch` unpacks it).
+- Come As You Are's sheet is `{tuning: Eb}`, then `{section: Verse}` lines
+  and chords inside the words: `C[F#m]ome as you [E]are`. Its chords are
+  F♯m, E, A, B and D. The tab's own chord names for the same song are D5,
+  G, Esus4, Em, A5, C and E7sus4, so the two do not agree.
+- Only 1 of the 6 saved songs has a sheet (`hasChords` in `meta.json`).
+  `/api/chords/1576708` (Earrings) answers 404.
+- Lyrics are rarer still: 2 of the 6 songs (Come As You Are, Tennessee
+  Whiskey) have a track with words. Songsterr's raw lyric text keeps its line
+  breaks, but alphaTab's Guitar Pro reader and writer keep only the
+  syllable on each beat, so `score.gp` has no line breaks.
+- Chord names in the tabs: 4 of the 6 songs, on one or two guitar tracks,
+  only where the chord changes. Songsterr's chord data is a name and a
+  width, no fingering.
+- Controls: a Capo on/off switch above the sheet. A bottom panel with
+  autoscroll speed (S, shows "100%"), Show diagrams, Simplify ("No chords
+  to simplify" on this song), Transpose (K), Start autoscroll (Space) and
+  Print (P, locked to Plus).
+- Its code shows an automatic capo ("No capo position can be found for
+  this song" when it fails) and a fingering generator with costs for fret
+  height, span, fingers, muted strings, open strings and barres, plus a
+  "cycle the fingering" key.
+
+### §16.2 Where the sheet comes from
+
+1. **Songsterr's sheet**, when the song has one. The importer saves it as
+   `chords.chordpro` next to `score.gp`. A song saved before this slice
+   picks it up the next time its link is imported: one extra request, the
+   tab is not fetched again. The hosted function sends it back with the
+   Guitar Pro file and the browser library keeps it with the song.
+2. **Built from the tab**, when there is no sheet, and as a second choice
+   when there is:
+   - Words from the track with the most lyric syllables. Chords from the
+     track with the most chord names. Both are placed by time, so a chord
+     sits on the syllable that is sung when the chord starts.
+   - A line of words ends where the singer rests for a half note or more,
+     at a section marker, or past about 48 characters.
+   - Bars with no words become a chord chart: one cell per bar, four bars a
+     line, under the tab's section names.
+   - When no track has chord names, the chords come from Detect chords
+     (§16.4), run on the guitar or keys track with the most beats of two or
+     more notes.
+   - A sheet built from the tab knows when every chord starts, so during
+     playback the current chord lights up and the page follows it.
+     Songsterr's sheet has no timing; it gets autoscroll instead.
+
+### §16.3 The chords view
+
+- The View panel gets a fourth choice, **Chords**. The tab is hidden; the
+  transport stays, so play, speed and loop work as before.
+- A bar above the sheet holds Source (only when both kinds exist), Capo,
+  Simplify, Diagrams and Autoscroll.
+- **Transpose** (K) renames every chord, with the §3.4 spelling rule. A
+  sheet built from the tab reads the already transposed score.
+- **Capo**: Off, Auto, or fret 1 to 9. With a capo, the names are the
+  shapes you play: the sounding chord moved down by the fret. Auto picks
+  the fret from 0 to 7 that turns the most chord changes into open shapes,
+  the lower fret on a tie, and says so when no fret beats no capo. A
+  sheet's own `{capo: N}` starts the capo at N and reads its chords as
+  shapes; no real sheet with one has been seen yet.
+- **Simplify**: every chord to its triad. 7, maj7, 9, add9, 6 and sus go
+  to major; m7, m9, madd9 and m6 to minor; slash basses are dropped; 5, dim
+  and aug stay. Says so when there is nothing to simplify.
+- **Diagrams**: one diagram per chord, in order of first use, for standard
+  tuning (a sheet with a tuning line names its chords as standard-tuning
+  shapes). Fingerings come from a search over every shape within four
+  frets, scored on height, span, fingers, muted strings, open strings and
+  barres, like Songsterr's generator. They must come out as the shapes
+  every guitarist knows: C x32010, G 320003, D xx0232, A x02220,
+  E 022100, Am x02210, Em 022000, Dm xx0231, F 133211, B7 x21202,
+  Bm x24432.
+- **Autoscroll**: start and stop, speed 25% to 300%, stops at the end.
+- **Print**: the sheet in black on white, through the browser's print
+  dialog.
+
+### §16.4 Detect chords
+
+- A switch in the View panel. On: green chord names above the tab of the
+  lead track, at the bars where it names none of its own. Worked out again
+  after a transpose.
+- How: one chord per bar, or one per half bar when the halves name
+  different chords. Notes are weighted by how long they sound. The chord is
+  the template (major, minor, 5, sus2, sus4, dim, aug, 6, m6, 7, maj7, m7,
+  m7♭5, dim7, 7sus4, add9, madd9, 9) that covers the most sound with the
+  least left over, preferring the lowest note as the root and naming any
+  other bass note as a slash chord. Fewer than two different notes: no
+  name. Spelled with the §3.4 rule.
+- Own code instead of tonal.js (§5). tonal's `Chord.detect` takes a bare
+  set of notes, with no weights and no bass, and returns names such as
+  "CM", so it would need the same wrapping. A small matcher with tests is
+  less to depend on.
+- Check: run it on the tracks that already carry hand-written names
+  (Tennessee Whiskey, Earrings, Fly Love, Come As You Are) and count the
+  bars where it agrees.
+
+### §16.5 Checks
+
+- Come As You Are in Chords view shows Songsterr's sheet: tuning line,
+  sections, chords over the right syllables. Source can switch to the sheet
+  built from the tab.
+- Tennessee Whiskey: words with chords from the tab. Compare the guessed
+  line breaks with the real ones in Songsterr's raw lyrics.
+- Earrings (no words): a chord chart under its section names.
+- Sprinter (no chord names anywhere): a chart from detected chords.
+- Transpose +2 renames every chord in both sources; capo 2 then shows the
+  original shapes again. Auto capo on a song in E♭ or B♭ picks a fret.
+- Simplify turns E♭madd9 into E♭m. Diagrams match the shapes in §16.3.
+- During playback, the current chord lights up and the page follows.
+- Autoscroll moves and stops at the end. Print shows only the sheet.
+- Detect chords: green names above the tab, gone when switched off,
+  agreement counts recorded.
+- Phone width: no sideways scroll. `npx tsc`, `npm test`, `npm run build`.
+
+### §16.6 Results (2026-11-13)
+
+Built and checked in the browser (Chromium) on Come As You Are, Tennessee
+Whiskey, Earrings and Sprinter, and through the hosted build
+(`npm run build` + preview). `npx tsc` clean, `npm test` 33 passing,
+`npm run build` succeeds. Not committed, not deployed.
+
+What changed from the design while building:
+
+1. **The real line breaks travel with the song.** Guessing lines from rests
+   and length found only 23% (Tennessee Whiskey) and 13% (Come As You Are)
+   of the real ones. `score.gp` keeps one syllable per beat in exactly the
+   order of Songsterr's text (353 and 232 syllables, checked one by one), so
+   the importer reads the line breaks from the raw text
+   (`tools/songsterr/lyrics.mjs`, same states as alphaTab's lyric reader)
+   and sends them along: `GET /api/library/<id>/extras` locally, `extras`
+   in the hosted function's reply, an `extras` store in the browser library
+   (IndexedDB version 2). Result: **100%** of the real lines in both songs
+   (26 of 26, 38 of 38); the few extra breaks fall on the tab's section
+   markers. Uploaded files have no such data and still guess, now also at
+   capital letters: 69% and 61%.
+2. **Detection uses sounding pitch, not tuned-down shapes.** Come As You
+   Are's hand-written names (Em, D5 on a guitar tuned a whole step down)
+   are sounding names; reading notes as shapes matched 0 of them.
+3. **Detection splits down to quarter bars**, but only where both halves are
+   struck chords of three or more notes, and not between two voicings of
+   one harmony (B♭m7 and D♭/A♭). Without those rules a riff spelled a new
+   "chord" every beat (Come As You Are: 209 changes for 12 written names).
+   Spelling is a vote of every detected chord, not the first one (Sprinter
+   came out D♯m, A♯m, C♯6; now E♭m, B♭m, D♭6).
+4. **Sparse names are filled in.** Songsterr names a riff once and leaves
+   the rest (Come As You Are: 12 names in 112 bars). When a track's own names
+   cover under half the bars it plays, detection fills the other bars. In
+   the chords view, detected names are green, like on the tab.
+
+Detection against the hand-written names, at each written name:
+
+| Song, track | Written | Same name | Same triad | Changes found |
+|---|---|---|---|---|
+| Tennessee Whiskey, rhythm guitar | 94 | 95% | 95% | 57 |
+| Earrings, rhythm guitar | 27 | 67% | 100% | 27 |
+| Come As You Are, chorus guitar | 12 | 75% | 100% | 107 (riff, Em/D5 a bar) |
+| Fly Love, track 1 | 5 | 100% | 100% | 90 (jazz voicings) |
+
+Earrings' 67% is E♭madd9 against E♭m9: the bar holds E♭ G♭ D♭ F, so the
+detected name is the closer one. Two floors are now tests (Tennessee
+Whiskey 90%, Earrings 95% same triad).
+
+Checked in the browser:
+
+- Come As You Are: Songsterr's sheet with its tuning line, sections and
+  chords over the right syllables; "From the tab" shows the real lyric
+  lines with Em/D5 filled in green.
+- Playback: the current chord lights up (bar 4 lit D5) and the page follows:
+  by bar 17 it had scrolled 400 px with the lit chord 374 px down a 615 px
+  window. Clicking a chord moves the cursor there.
+- Transpose +2: the tab sheet went Em→F♯m, D5→E5; Songsterr's sheet
+  F♯m→G♯m, E→F♯. Capo 2 then showed F♯m E A B D again. Auto capo at the
+  original key chose fret 2: Em D G A C, all open shapes.
+- Diagrams match all eleven shapes in §16.3 (also a test). Bm draws as the
+  x24432 barre; shapes up the neck show their fret on the left.
+- Tennessee Whiskey: words with A, Bm, D. Earrings: a four-bar chart under
+  its section names; Simplify turns E♭madd9 into E♭m. Sprinter: whole chart
+  detected, 23 different chords, each with a diagram.
+- Autoscroll: about 25 px a second at 100%, stops on Stop and by itself at
+  the end of the page.
+- Detect chords on the tab: 81 green names on Sprinter, re-detected after
+  transpose +2 (E♭m F7 B♭m → Fm G7 Cm). Off again: no names or styles left.
+  A Guitar Pro download made with it on holds none of them.
+- Phone width (375 px): no sideways scroll; long lines wrap at chords.
+- Hosted build: importing Come As You Are stored the sheet and 37 line
+  starts in the browser; the chords view offered both sheets.
+
+Not checked, or known gaps:
+
+- **Green spreads to other marks on the same beat.** alphaTab colours all
+  of a beat's marks above the staff together, so a tempo mark or a dynamic
+  on a beat that gets a detected name turns green too (bar 1 of Sprinter).
+- The print dialog was not opened; only the print stylesheet is written.
+- Not listened to; Chromium only.
+- Detection is busy on arpeggiated and jazz parts (Fly Love: 90 changes in
+  74 bars) and names the chord each voicing spells, not the chord the
+  written names imply over several bars.
+- One fingering per chord, standard tuning only; Songsterr can cycle
+  through fingerings.
+- A sheet's own `{capo: N}` is handled but no real sheet with one was seen.
+- Sheets disagree with tabs in Songsterr's own data: Come As You Are's sheet
+  says tuning E♭ with F♯m and E, its tab is tuned to D with Em and D5.
+- Chord names are shown as the tab writes them (Earrings has one A♯ among
+  its B♭s).
+
+---
+
+## §17 Phase 2, third slice: bar menu, track autoswitch, rearrange (2026-11-13)
+
+Written before the code. Songsterr's code (read 2026-11-13) generates the
+switch points itself (`partSwitching/generate`), has an on/off setting
+(`aiTrackAutoswitch`), and saves per-bar corrections ("markers") to the
+account. Woodshed keeps the corrections in this browser.
+
+### §17.1 Bar menu
+
+- A small ⋮ button sits at the bottom right of the bar under the pointer,
+  and of the bar the cursor is in (so touch screens have one too).
+- It opens a menu for that bar: **Loop this bar**, **Play from here**, and,
+  when the song has another track of the same kind, **In this bar show**:
+  Automatic, the picked track, or any other guitar (bass, keys) track.
+- Edit this bar waits for the editor (phase 4).
+
+### §17.2 Track autoswitch
+
+- A switch in the Tracks panel: **Follow the part across tracks**. Off by
+  default.
+- A song's part is often split over several tracks (clean and distorted
+  guitar). With the switch on, during playback, when the picked track rests
+  for a whole bar and another track of the same kind plays in it, the page
+  shows that track for those bars, then goes back.
+- "Same kind": guitars (General MIDI 24 to 31) with guitars, basses (32 to
+  39) with basses, other pitched sounds with each other; never drums.
+- Which one: the track already showing if it plays; else the one that
+  plays the most notes in that bar.
+- The bar menu's choice for a bar wins over the automatic one. Kept per
+  song in this browser.
+- The picked track stays the one saved for the song and in the address;
+  only the page follows the part. The lead volume follows the track shown,
+  since it is the same part.
+- The switch is drawn a beat early, so the new track is on screen when its
+  bar starts. alphaTab redraws the whole page on a switch: to be measured.
+
+### §17.3 Rearrange buttons
+
+- Settings gets **Rearrange buttons**: the toolbar's buttons in a list,
+  each with move-up and move-down buttons (and drag on a mouse). Saved in
+  this browser. **Reset** puts them back.
+
+### §17.4 Checks
+
+- The ⋮ button follows the pointer; Loop this bar loops exactly that bar;
+  Play from here starts at its first beat.
+- On a song with a split part, playing with autoswitch on shows the other
+  track in the bars where the picked one rests and comes back after;
+  switching costs measured; per-bar choice from the menu respected and
+  remembered after a reload.
+- Rearranged buttons keep their order after a reload; Reset works;
+  keyboard-only reordering works.
+- `npx tsc`, `npm test`, `npm run build`.
+
+### §17.5 Results (2026-11-13)
+
+Built and checked in the browser on Earrings (Lead Guitar picked, Rhythm
+Guitar the other guitar). `npx tsc` clean, `npm test` 34 passing,
+`npm run build` succeeds. Not committed, not deployed.
+
+- **Bar menu.** The ⋮ sits just under the staff at the right end of the bar
+  under the pointer, or the cursor's bar. First version chased the pointer:
+  moving toward the button crossed into the next bar and the button moved
+  away, so the click landed on the tab. Fixed: the bar holds still while
+  the pointer is on the button or menu. Loop this bar looped exactly bar 15
+  (`{startBar: 15, endBar: 15}`). Near the bottom of the window the menu
+  opens upward; Escape and a click outside close it.
+- **Autoswitch.** Planned run for Earrings: Rhythm Guitar in bars 1–16,
+  37–40 and 45–48 (where Lead Guitar rests), Lead Guitar elsewhere. Played
+  with it on: switched to Rhythm Guitar at the last beat of the pickup bar
+  and back to Lead Guitar at tick 2904 of bar 16 (the last beat), so each
+  new track was on the page before its bar. **A switch redraws the page in
+  43 to 69 ms** (four switches measured), during playback without a stutter
+  in the cursor. The picked track and the address stayed on Lead Guitar
+  throughout.
+- **Per-bar choice.** "In this bar show: Rhythm Guitar" on bar 20 (where the
+  lead plays) switched for exactly that bar: to Rhythm at the last beat of
+  bar 19, back at the last beat of bar 20. Saved per song (`switches:
+  {"20": 2}`) and still applied after a reload.
+- **Rearrange buttons.** Moving with the arrow buttons reorders the toolbar
+  at once and survives a reload. With the keyboard alone, two Enter presses
+  on "Move Print earlier" moved it two places, so focus stays with the
+  button as its row moves. Reset puts back the default order. The Space
+  between the two groups is in the list as its own row.
+
+Not checked, or known gaps:
+
+- Drag to reorder is written but was not tried with a real mouse drag.
+- Not listened to. A switch changes which track gets the lead volume, as
+  designed, so with backing turned down the sound follows the part.
+- Autoswitch acts only while playing. Moving the cursor by hand while
+  paused leaves the page on whatever track it shows.
+- Only Earrings has been tried; Come As You Are has four guitar tracks and
+  would be the harder case.
+
+---
+
+## §18 Phase 3, first slice: play along with the YouTube recording (2026-11-13)
+
+Written before the code. Phase 3 (§7) is cut in two: **3a** plays the
+song's YouTube videos in step with the tab, using the sync points Songsterr
+already has; **3b** is uploaded audio (any speed, pitch shift), tap-along
+sync for songs without points, and stems.
+
+### §18.1 What is already saved
+
+Every Songsterr import keeps `video-points.json` (§11). Measured on the six
+saved songs: 3 to 70 videos a song, each with a YouTube id, a `feature`
+(none = the original full mix, `backing`, `solo`, `playthrough`,
+`alternative` = another upload of the full mix), for backing tracks the
+tracks left out (`tracks: [3]` = without track 3), and `points`: the time in
+seconds at which each bar starts, in playing order. Earrings: pickup at
+0.14 s, bar 1 at 1.63 s, then 3.0 s a bar at 80 BPM. Most videos have one
+point per bar played; a few have one or two more or fewer (Earrings 52 for
+50 bars, Come As You Are 107 to 113 for 112). Only the first points that
+match bars are used; a video with fewer simply ends early.
+
+### §18.2 How it plays
+
+- alphaTab 1.9's external-media mode (`PlayerMode.EnabledExternalMedia`):
+  the video is the clock. Woodshed gives alphaTab a handler (play, pause,
+  seek, rate, volume, duration) wrapping the YouTube IFrame API, reports the
+  video's time every 50 ms (`updatePosition`), and turns each point into a
+  sync point (bar, which pass through it, milliseconds).
+- Sync points are applied again after every new score (transpose rebuilds
+  it), from the bar order the player itself uses.
+- The video plays in a small box above the transport, bottom left
+  (Songsterr puts it in a corner too), from youtube-nocookie.com. Its own
+  play button, pause and scrub keep the tab in step.
+
+### §18.3 Controls
+
+- A **Recording** button in the toolbar (shortcut V switches between the
+  synth and the last video, as on Songsterr) opens a panel: Synth, Full
+  mix, each backing track ("Backing, without Bass"), Solo, Playthrough, and
+  up to three other uploads of the full mix in case one is blocked. Saved
+  per song.
+- **Speed** with a video: only YouTube's rates (§4.2), so the speed snaps to
+  25, 50, 75, 100, 125, 150 or 175%. The panel says so.
+- **Shift the sound**, the mixer, count-in and metronome do nothing to a
+  video; their controls say so instead of failing silently.
+- Loop works: alphaTab seeks the video back at the loop end.
+- The hosted copy gets the points through the song's extras (§16.2), so it
+  works there too.
+
+### §18.4 Checks
+
+- Earrings, full mix: the cursor is on the bar the recording plays (check
+  the bar readout at several times against the points); pause, seek by
+  clicking a bar, and the video's own controls all keep step.
+- A backing video and a loop of two bars.
+- Speed 50% snaps and plays at half speed; transpose keeps sync.
+- Back to Synth: the synth plays again with mixer and count-in.
+- Hosted build: a newly imported song has its videos.
+- `npx tsc`, `npm test`, `npm run build`.
+
+### §18.5 Results (2026-11-13)
+
+Built and checked in the browser on Earrings with its full-mix video, and
+through the hosted build. `npx tsc` clean, `npm test` 34 passing,
+`npm run build` succeeds. Not committed, not deployed.
+
+- **In step with the recording.** Sampled while playing, the video's time
+  and the tab's position against Songsterr's points:
+
+  | Video time | Bar the points give | Bar on the tab | Into the bar: video / tab |
+  |---|---|---|---|
+  | 7.04 s | 2 | 2 | 2.41 / 2.40 s |
+  | 14.05 s | 5 | 5 | 0.42 / 0.40 s |
+  | 21.06 s | 7 | 7 | 1.42 / 1.40 s |
+  | 31.57 s (after transpose +2) | 10 | 10 | 2.93 / 2.80 s |
+
+- Pause stops the video. Moving the cursor to bar 20 while paused moved the
+  video to 58.75 s and left it paused. The video's own play and pause (its
+  events) start and stop the tab.
+- Speed 50% plays the video at 0.5; one step up from there is 75%, one down
+  from 74% is 50%.
+- Loop on bars 4 and 5: after bar 5 the video jumped back to 11.5 s and the
+  tab to bar 4, three times running.
+- Transpose rebuilds the score; the sync points went back on by themselves
+  (last row above).
+- V switches between the synth and the last recording. **Found and fixed:**
+  a click on the video moved keyboard focus into YouTube's frame, where V,
+  Space and every other shortcut stopped reaching the page. The page now
+  takes focus back (YouTube's own keys are off), and V worked after a click
+  on the video.
+- Back on the synth the player is the synthesizer again (mode 2) and
+  count-in, metronome and the mixer apply.
+- The Recording panel lists Synth, Full mix, each backing track by what it
+  leaves out ("Backing, without Bass Guitar"), solo and playthrough videos
+  when there are any, and up to three other uploads.
+- Hosted build: re-importing Earrings stored its 17 recordings with the
+  song, and the Recording button appeared.
+
+Not checked, or known gaps:
+
+- The automated browser shows YouTube's frame as black and does not pass
+  clicks into it, so the video was never watched and its on-screen buttons
+  were not clicked; its play and pause events were raised through the API.
+- Not listened to.
+- Sync was sampled at four moments on one video of one song. Videos whose
+  point count differs from the bars played (Come As You Are, 107 to 113 for
+  112 bars) were not tried; past the last point the tab cannot follow.
+- Songs already saved in a browser before this slice have no recordings
+  there until their link is imported again.
+- YouTube keeps its own volume; the master volume slider sets it, but the
+  per-track sliders cannot reach inside a video.
+- 3b (uploaded audio with any speed and pitch, tap-along sync, stems) is
+  not started.
+
+---
+
+## §19 Fixes from Andrew's report (2026-11-13)
+
+What he saw, what caused it, what changed. Checked in the browser after.
+
+### §19.1 Blank page on the way back to the library
+
+- Cause: with a recording loaded, leaving the song removed the video's box,
+  then YouTube's own clean-up threw ("Failed to execute 'removeChild'"). An
+  error in a clean-up takes down the whole React tree, so the page went
+  blank. Reproduced before the fix.
+- Fix: the video's clean-up can no longer throw, and the engine ignores the
+  recording calls that arrive after the page has closed.
+- Checked: back to the library from bake shop with its video loaded, then
+  into Earrings and back again: library shown both times, no errors.
+
+### §19.2 "Cannot read properties of undefined (reading 'staves')"
+
+- Cause: alphaTab's Tab profile draws tab staves only. A drum track has no
+  tab, so a drum track alone on the page left alphaTab nothing to draw and it
+  crashed. Every song's drum track did it (Earrings and bake shop tried).
+  §15.6 had only drawn drums next to a guitar. The error then stuck until a
+  reload, because a later good drawing never cleared it.
+- Fix: every view now draws with all staff types allowed, and each staff
+  says what it shows: drums always drum notation; fretted tracks tab (Tab),
+  notation (Sheet) or both (Both); anything without strings notation. A
+  finished drawing clears an earlier drawing error.
+- Checked on bake shop: drums alone in Tab and Both draw (45 lines); guitar
+  in Tab shows tab only, in Both two staves a line, in Sheet notation only;
+  guitar to drums and back with no error.
+
+### §19.3 Opening track: the most popular one, never drums by accident
+
+- A Songsterr song opens on the track the link names (a track number, or a
+  bass or drum link), else Songsterr's most played guitar track, else its
+  most played track if that isn't drums, else the first guitar, else the
+  first track that isn't drums. Uploaded files: first guitar, else first
+  non-drum track.
+- The track used last is still remembered, except a drum track: from the
+  library a song opens on its default instead, unless the Drums filter is on.
+- Checked: with Earrings remembering its drum track, the library opened it
+  on Lead Guitar; bake shop opened on Rhythm Guitar. A test checks that no
+  saved song defaults to drums.
+
+### §19.4 The recording plays by default
+
+- A song that was never set to Synth plays its YouTube full mix: the
+  original upload, else the next upload of the full mix. When YouTube
+  refuses one (blocked on other sites, removed), the next is tried, then
+  the synth. Picking Synth in the Recording panel (or V) is remembered per
+  song.
+- bake shop had no sound because of §19.2: the page was showing the error,
+  and the video is only loaded once the tab has drawn. Its full mix plays:
+  YouTube playing, not muted, and the tab on the right bar (bars 2 and 4 at
+  3.97 s and 7.97 s).
+
+`npx tsc` clean, `npm test` 36 passing, `npm run build` succeeds. Not
+committed, not deployed.

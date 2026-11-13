@@ -6,7 +6,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { importFromLink } from '../tools/songsterr/import.mjs';
 import { readSaved } from '../tools/songsterr/fetch.mjs';
-import { songsterrInstruments } from '../tools/instruments.mjs';
+import { popularTrack, songsterrInstruments, trackForLink } from '../tools/instruments.mjs';
+import { parseLink } from '../tools/songsterr/fetch.mjs';
+import { songExtras } from '../tools/songsterr/extras.mjs';
 
 function send(res, status, body) {
   res.statusCode = status;
@@ -60,12 +62,14 @@ export default async function handleSongsterr(req, res) {
         artist: source.artist,
         tracks: meta.tracks.length,
         instruments: songsterrInstruments(meta),
-        defaultTrack: source.linkedTrack ?? 0,
+        defaultTrack: trackForLink(parseLink(source.link), meta) ?? popularTrack(meta),
         link: source.link,
         revisionId: source.revisionId,
         format: 'Guitar Pro',
       },
       gp: gp.toString('base64'),
+      // The chord sheet and lyric line starts, kept with the song in the browser (plan §16.2).
+      extras: await songExtras(dir),
       track: linkTrack,
       problems: result.problems,
       unknown: Object.keys(result.unknownFields).length + Object.keys(result.unmappedValues).length,

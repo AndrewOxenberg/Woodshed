@@ -6,8 +6,10 @@ import { createHash } from 'node:crypto';
 import * as alphaTab from '@coderline/alphatab';
 import { importFromLink } from '../tools/songsterr/import.mjs';
 import { parseAsciiTab } from '../tools/ascii-tab.mjs';
-import { scoreInstruments, songsterrInstruments } from '../tools/instruments.mjs';
+import { defaultTrack, popularTrack, scoreInstruments, songsterrInstruments, trackForLink } from '../tools/instruments.mjs';
+import { parseLink } from '../tools/songsterr/fetch.mjs';
 import handleSongsterr from './songsterr-handler.mjs';
+import { NO_EXTRAS, songExtras } from '../tools/songsterr/extras.mjs';
 
 const MAX_UPLOAD = 25 * 1024 * 1024;
 const ID = /^(songsterr|file)-([a-z0-9][a-z0-9-]*)$/;
@@ -19,6 +21,15 @@ function dirFor(root, id) {
   const m = id.match(ID);
   if (!m) return null;
   return join(root, m[1] === 'songsterr' ? 'songsterr' : 'files', m[2]);
+}
+
+/** The track a link names (a track number, or a bass or drum link), else the most popular guitar track. Plan §19.3. */
+export function songsterrDefault(source, meta) {
+  try {
+    return trackForLink(parseLink(source.link), meta) ?? popularTrack(meta);
+  } catch {
+    return popularTrack(meta);
+  }
 }
 
 async function describeSongsterr(root, name) {
@@ -33,7 +44,7 @@ async function describeSongsterr(root, name) {
     artist: source.artist,
     tracks: meta.tracks.length,
     instruments: songsterrInstruments(meta),
-    defaultTrack: source.linkedTrack ?? 0,
+    defaultTrack: songsterrDefault(source, meta),
     addedAt: source.fetchedAt,
     link: source.link,
     revisionId: source.revisionId,
@@ -58,7 +69,7 @@ async function describeFile(root, name) {
     artist: source.artist,
     tracks: source.tracks,
     instruments: source.instruments,
-    defaultTrack: 0,
+    defaultTrack: defaultTrack(source.instruments, source.tracks),
     addedAt: source.addedAt,
     originalName: source.originalName,
     format: source.format,
@@ -212,6 +223,10 @@ export function libraryApi(root) {
         const id = rest[0];
         const dir = dirFor(root, id);
         if (!(await exists(dir))) return send(res, 404, { error: 'That tab is not in the library.' });
+        if (req.method === 'GET' && rest[1] === 'extras') {
+          // Songsterr's chord sheet and where the lines of the words start. Plan §16.2.
+          return send(res, 200, id.startsWith('songsterr-') ? await songExtras(dir) : NO_EXTRAS);
+        }
         if (req.method === 'GET' && rest[1] === 'score') {
           return send(res, 200, await readFile(await scorePath(root, id)), 'application/octet-stream');
         }
